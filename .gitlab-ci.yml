@@ -1,0 +1,87 @@
+image: python:3.11-slim
+
+stages:
+  - lint
+  - test
+  - build
+  - publish
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
+
+cache:
+  paths:
+    - .pip-cache/
+
+before_script:
+  - pip install --quiet -r requirements.txt
+
+# ── Lint ─────────────────────────────────────────────────────────────────────
+ruff:
+  stage: lint
+  script:
+    - ruff check src/ tests/
+  allow_failure: false
+
+mypy:
+  stage: lint
+  script:
+    - mypy src/ --ignore-missing-imports
+  allow_failure: true
+
+# ── Test ─────────────────────────────────────────────────────────────────────
+pytest:
+  stage: test
+  script:
+    - pytest tests/ --cov=src --cov-report=xml --cov-report=term-missing -v
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    paths:
+      - coverage.xml
+    expire_in: 1 week
+
+# ── Build ─────────────────────────────────────────────────────────────────────
+docker-build:
+  stage: build
+  image: docker:24
+  services:
+    - docker:24-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" .
+    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+    - |
+      if [ "$CI_COMMIT_TAG" ]; then
+        docker tag "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" "$CI_REGISTRY_IMAGE:$CI_COMMIT_TAG"
+        docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_TAG"
+        docker tag "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" "$CI_REGISTRY_IMAGE:latest"
+        docker push "$CI_REGISTRY_IMAGE:latest"
+      fi
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_TAG'
+
+# ── Publish to AI Catalog ─────────────────────────────────────────────────────
+publish-catalog:
+  stage: publish
+  script:
+    - |
+      curl -s --fail -X POST \
+        -H "PRIVATE-TOKEN: $CATALOG_PUBLISH_TOKEN" \
+        -H "Content-Type: application/json" \
+        "$CI_SERVER_URL/api/v4/catalog/resources" \
+        -d "{
+          \"name\": \"mergeguard\",
+          \"description\": \"Cross-MR Semantic Collision Sentinel powered by GitLab Orbit\",
+          \"project_id\": $CI_PROJECT_ID,
+          \"version\": \"$CI_COMMIT_TAG\"
+        }" || echo "Catalog publish skipped (requires CATALOG_PUBLISH_TOKEN)"
+  rules:
+    - if: '$CI_COMMIT_TAG'
+  when: manual
+  allow_failure: true

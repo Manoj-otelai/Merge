@@ -1,0 +1,57 @@
+name: extract-symbols
+display_name: "Extract Changed Symbols from MR Diff"
+description: >
+  Parses a GitLab MR unified diff and returns all changed function, class,
+  and method signatures as a SymbolChange list. Only reports REMOVED and
+  SIGNATURE_CHANGED symbols — newly-added symbols cannot cause collisions
+  because nothing on the default branch calls them yet.
+
+  Supports: Python (.py), JavaScript (.js, .jsx), TypeScript (.ts, .tsx).
+  Uses Python ast.parse() for Python files and regex patterns for JS/TS.
+version: "1.0.0"
+
+inputs:
+  - name: project_id
+    type: integer
+    required: true
+    description: "GitLab project numeric ID"
+  - name: mr_iid
+    type: integer
+    required: true
+    description: "Merge request IID (internal per-project counter)"
+
+outputs:
+  - name: symbols
+    type: array
+    description: "List of SymbolChange objects (name, old_signature, new_signature, file_path, language, change_type)"
+  - name: symbol_count
+    type: integer
+    description: "Total number of changed symbols found"
+
+implementation:
+  type: http
+  url: "${MERGEGUARD_WEBHOOK_URL}/extract"
+  method: POST
+  headers:
+    Content-Type: "application/json"
+    Authorization: "Bearer ${MERGEGUARD_API_TOKEN}"
+  body_template: |
+    {
+      "project_id": {{ inputs.project_id }},
+      "mr_iid": {{ inputs.mr_iid }}
+    }
+
+examples:
+  - description: "Python function signature change"
+    input:
+      project_id: 101
+      mr_iid: 23
+    output:
+      symbols:
+        - name: "charge_user"
+          old_signature: "def charge_user(amount: float) -> bool"
+          new_signature: "def charge_user(amount: float, currency: str = 'USD') -> bool"
+          file_path: "src/payments/charge.py"
+          language: "python"
+          change_type: "signature_changed"
+      symbol_count: 1

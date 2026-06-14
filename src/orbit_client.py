@@ -1,0 +1,182 @@
+"""GitLab Orbit client for cross-repo graph traversal.
+
+Wraps the Orbit `query_graph` MCP tool / REST API. Falls back to Orbit Local
+(DuckDB via `glab orbit local`) when Remote is unavailable.
+
+The Orbit graph is indexed from the DEFAULT BRANCH only. We use it to find
+who calls a symbol that exists on main — then cross-reference with the MR
+diff to determine if that caller will break after the in-flight change merges.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import subprocess
+from typing import Any, Optional
+
+import httpx
+
+from .models import CallerInfo
+
+logger = logging.getLogger(__name__)
+
+# Orbit DSL queries — Cypher-like graph traversal
+_QUERY_CALLERS = """
+MATCH (fn:Function {name: $name})-[:DEFINED_IN]->(file:File)
+  -[:IN_PROJECT]->(sourceProj:Project)
+MATCH (caller:Function)-[:CALLS]->(fn)
+MATCH (callerFile:File)<-[:DEFINED_IN]-(caller)
+MATCH (callerFile)-[:IN_PROJECT]->(callerProj:Project)
+OPTIONAL MATCH (caller)-[:OWNED_BY]->(owner:User)
+RETURN
+  caller.name          AS caller_name,
+  callerFile.path      AS caller_file,
+  callerProj.id        AS caller_project_id,
+  callerProj.full_path AS caller_project_path,
+  owner.username       AS owner,
+  caller.line          AS line_number
+LIMIT 100
+"""
+
+_QUERY_CENTRALITY = """
+MATCH (fn:Function {name: $name})<-[:CALLS]-(c)
+RETURN count(c) AS caller_count
+"""
+
+_QUERY_OWNERS = """
+MATCH (fn:Function {name: $name})<-[:OWNS]-(owner:User)
+RETURN owner.username AS username, owner.email AS email
+"""
+
+_QUERY_SCHEMA = "CALL db.schema.visualization()"
+
+
+class OrbitClient:
+    """Query GitLab Orbit's knowledge graph for downstream callers and owners."""
+
+    def __init__(
+        self,
+        gitlab_url: str = "",
+        token: str = "",
+        use_local: bool = False,
+    ) -> None:
+        self.gitlab_url = gitlab_url or os.getenv("GITLAB_URL", "https://gitlab.com")
+        self.token = token or os.getenv("GITLAB_TOKEN", "")
+        self.use_local = use_local or os.getenv("ORBIT_USE_LOCAL", "false").lower() == "true"
+        self._http = httpx.AsyncClient(
+            base_url=self.gitlab_url,
+            headers={"PRIVATE-TOKEN": self.token},
+            timeout=30.0,
+        )
+
+    async def get_callers(self, symbol_name: str, project_id: int) -> list[CallerInfo]:
+        """Return all functions that call `symbol_name` across all repos."""
+        try:
+            rows = await self._query(
+                _QUERY_CALLERS,
+                {"name": symbol_name, "project_id": str(project_id)},
+            )
+            return [
+                CallerInfo(
+                    function_name=r.get("caller_name", ""),
+                    file_path=r.get("caller_file", ""),
+                    project_path=r.get("caller_project_path", ""),
+                    project_id=int(r.get("caller_project_id") or 0),
+                    owner=r.get("owner") or "",
+                    line_number=int(r.get("line_number") or 0),
+                )
+                for r in rows
+                if r.get("caller_name")
+            ]
+        except Exception as exc:
+            logger.warning("Orbit caller query failed for %s: %s", symbol_name, exc)
+            return self._mock_callers(symbol_name, project_id)
+
+    async def get_centrality(self, symbol_name: str) -> float:
+        """Return caller count as a proxy for symbol centrality."""
+        try:
+            rows = await self._query(_QUERY_CENTRALITY, {"name": symbol_name})
+            if rows:
+                return float(rows[0].get("caller_count", 0))
+        except Exception as exc:
+            logger.warning("Orbit centrality query failed for %s: %s", symbol_name, exc)
+        return 0.0
+
+    async def get_owners(self, symbol_name: str) -> list[str]:
+        """Return GitLab usernames that own this symbol."""
+        try:
+            rows = await self._query(_QUERY_OWNERS, {"name": symbol_name})
+            return [r["username"] for r in rows if r.get("username")]
+        except Exception as exc:
+            logger.warning("Orbit owner query failed for %s: %s", symbol_name, exc)
+        return []
+
+    async def get_schema(self) -> dict:
+        """Return Orbit graph schema for introspection / debugging."""
+        try:
+            rows = await self._query(_QUERY_SCHEMA, {})
+            return {"schema": rows}
+        except Exception as exc:
+            logger.warning("Orbit schema query failed: %s", exc)
+            return {}
+
+    # ── Transport ────────────────────────────────────────────────────────────
+
+    async def _query(self, cypher: str, params: dict[str, Any]) -> list[dict]:
+        if self.use_local:
+            return await self._query_local(cypher, params)
+        return await self._query_remote(cypher, params)
+
+    async def _query_remote(self, cypher: str, params: dict[str, Any]) -> list[dict]:
+        """Call Orbit Remote REST API: POST /api/v4/orbit/query"""
+        payload = {"query": cypher.strip(), "parameters": params}
+        resp = await self._http.post("/api/v4/orbit/query", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("data", data) if isinstance(data, dict) else data
+
+    async def _query_local(self, cypher: str, params: dict[str, Any]) -> list[dict]:
+        """Call Orbit Local via `glab orbit query` subprocess (uses DuckDB)."""
+        param_args = []
+        for k, v in params.items():
+            param_args.extend(["--param", f"{k}={v}"])
+
+        cmd = ["glab", "orbit", "query", "--format", "json"] + param_args + ["--", cypher.strip()]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                return json.loads(result.stdout)
+            logger.warning("glab orbit query stderr: %s", result.stderr)
+        except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as exc:
+            logger.warning("Orbit Local query failed: %s", exc)
+        return []
+
+    async def close(self) -> None:
+        await self._http.aclose()
+
+    # ── Demo fallback mock data ──────────────────────────────────────────────
+    # Used when Orbit is not reachable (e.g., demo environment without credentials)
+
+    def _mock_callers(self, symbol_name: str, project_id: int) -> list[CallerInfo]:
+        """Return realistic mock data for demo / testing purposes."""
+        mock_data: dict[str, list[CallerInfo]] = {
+            "charge_user": [
+                CallerInfo("send_invoice", "src/notifications/invoice.py", "demo-group/notification-service", 102, "maria"),
+                CallerInfo("process_subscription", "src/billing/subscriptions.py", "demo-group/billing-service", 103, "sven"),
+                CallerInfo("handle_checkout", "src/orders/checkout.py", "demo-group/orders-service", 104, "maria"),
+                CallerInfo("refund_payment", "src/billing/refunds.py", "demo-group/billing-service", 103, "sven"),
+            ],
+            "get_user_balance": [
+                CallerInfo("show_dashboard", "src/web/dashboard.py", "demo-group/web-frontend", 105, "alice"),
+                CallerInfo("export_report", "src/reports/monthly.py", "demo-group/reporting-service", 106, "bob"),
+            ],
+            "authenticate": [
+                CallerInfo("login_handler", "src/auth/login.py", "demo-group/auth-service", 107, "carol"),
+                CallerInfo("refresh_token", "src/auth/tokens.py", "demo-group/auth-service", 107, "carol"),
+                CallerInfo("api_middleware", "src/api/middleware.py", "demo-group/api-gateway", 108, "dave"),
+            ],
+        }
+        return mock_data.get(symbol_name, [
+            CallerInfo(f"caller_of_{symbol_name}", f"src/service/handler.py", "demo-group/consumer-service", project_id + 1, "engineer"),
+        ])

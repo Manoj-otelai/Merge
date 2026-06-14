@@ -1,0 +1,36 @@
+diff --git a/src/notifications/invoice.py b/src/notifications/invoice.py
+index 0000000..aabbcc1 100644
+--- a/src/notifications/invoice.py
++++ b/src/notifications/invoice.py
+@@ -1,15 +1,28 @@
+ """Invoice notification service."""
+ from ..payments.charge import PaymentService
+
+
+ class InvoiceNotifier:
+     """Sends invoice notifications and processes payments."""
+
+     def notify_user(self, user_id: int, message: str) -> None:
+         """Send a notification to the user."""
+         self._send_email(user_id, message)
+
++    def send_invoice(self, user_id: int, amount: float) -> None:
++        """Send invoice email and charge the user."""
++        payment_svc = PaymentService()
++        # NOTE: calls the current charge_user(amount) signature
++        success = payment_svc.charge_user(amount)
++        if success:
++            self._send_email(user_id, f"Invoice for ${amount:.2f} — payment successful")
++        else:
++            self._send_email(user_id, f"Invoice for ${amount:.2f} — payment FAILED")
++
++    def send_subscription_renewal(self, user_id: int, plan_amount: float) -> None:
++        """Charge user for monthly subscription renewal."""
++        svc = PaymentService()
++        charged = svc.charge_user(plan_amount)
++        if charged:
++            self._log_renewal(user_id, plan_amount)
++
+     def _send_email(self, user_id: int, body: str) -> None:
+         """Internal email sender."""
+         pass

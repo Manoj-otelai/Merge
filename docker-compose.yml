@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  mergeguard:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - GITLAB_URL=${GITLAB_URL:-https://gitlab.com}
+      - GITLAB_TOKEN=${GITLAB_TOKEN}
+      - GITLAB_WEBHOOK_SECRET=${GITLAB_WEBHOOK_SECRET:-changeme}
+      - ORBIT_USE_LOCAL=${ORBIT_USE_LOCAL:-false}
+      - MERGEGUARD_DB=/data/mergeguard.db
+      - MERGEGUARD_WEBHOOK_URL=${MERGEGUARD_WEBHOOK_URL:-http://localhost:8080}
+    volumes:
+      - mergeguard-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  mergeguard-data:

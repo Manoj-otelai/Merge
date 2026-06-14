@@ -1,0 +1,41 @@
+diff --git a/src/payments/charge.py b/src/payments/charge.py
+index 1a2b3c4..5d6e7f8 100644
+--- a/src/payments/charge.py
++++ b/src/payments/charge.py
+@@ -1,25 +1,27 @@
+ """Payment processing service."""
+ from decimal import Decimal
+-from typing import Optional
++from typing import Optional
++from .currencies import Currency, DEFAULT_CURRENCY
+
+
+ class PaymentService:
+     """Handles user payment processing."""
+
+-    def charge_user(self, amount: float) -> bool:
++    def charge_user(self, amount: float, currency: str = "USD") -> bool:
+         """
+-        Charge the user's default payment method.
++        Charge the user's default payment method in the specified currency.
+
+         Args:
+             amount: Amount to charge in dollars
++            currency: ISO 4217 currency code (default: USD)
+
+         Returns:
+             True if charge succeeded, False otherwise
+         """
+-        return self._process_payment(amount)
++        return self._process_payment(amount, currency)
+
+     def get_user_balance(self, user_id: int) -> Decimal:
+         """Fetch the user's current account balance."""
+         balance = self._fetch_balance(user_id)
+         return balance
+
+-    def _process_payment(self, amount: float) -> bool:
++    def _process_payment(self, amount: float, currency: str) -> bool:
+         """Internal payment processor."""
+         # In production: call payment gateway
+         return True

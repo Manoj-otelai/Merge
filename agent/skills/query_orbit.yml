@@ -1,0 +1,77 @@
+name: query-orbit-blast-radius
+display_name: "Query Orbit for Symbol Blast Radius"
+description: >
+  Given a list of changed symbols, uses GitLab Orbit's query_graph and
+  get_graph_schema MCP tools to find all downstream callers and code owners
+  of each symbol across ALL repositories in the GitLab group.
+
+  IMPORTANT: Orbit indexes the default branch only. Callers returned are those
+  that call this symbol as it exists on main — which is exactly what we need to
+  detect breakage risk when the symbol's signature changes in an open MR.
+
+  Performs cross-repo traversal via the REFERENCES relationship type, finding
+  Definition nodes that call the changed symbol and their owning Projects.
+  Returns centrality scores (caller count) for severity assessment.
+version: "1.0.0"
+
+inputs:
+  - name: symbols
+    type: array
+    required: true
+    description: "List of SymbolChange objects from the extract-symbols skill"
+  - name: project_id
+    type: integer
+    required: true
+    description: "The source project ID (used to filter out self-references)"
+
+outputs:
+  - name: changed_symbols
+    type: array
+    description: "Original symbols list, passed through"
+  - name: downstream_callers
+    type: array
+    description: "CallerInfo objects: function_name, file_path, project_path, owner"
+  - name: affected_owners
+    type: array
+    description: "GitLab usernames of code owners for the affected symbols"
+  - name: centrality_score
+    type: number
+    description: "Max caller count across all changed symbols (used for severity scoring)"
+
+implementation:
+  type: mcp
+  tools:
+    - query_graph
+    - get_graph_schema
+
+  instructions: |
+    1. Call get_graph_schema to discover available node types and relationship types.
+    2. For each symbol in inputs.symbols:
+       a. Run a traversal query on Definition nodes where name = symbol.name,
+          following REFERENCES (or CALLS if available) relationships incoming
+          to find callers, then IN_PROJECT outgoing to get project paths.
+       b. Run an aggregation query to count total callers (centrality).
+    3. Aggregate all callers across all symbols, deduplicating by
+       (function_name, file_path, project_path).
+    4. Return the combined BlastRadius.
+
+examples:
+  - description: "Find callers of a renamed Python function"
+    input:
+      symbols:
+        - name: "charge_user"
+          change_type: "signature_changed"
+          language: "python"
+      project_id: 101
+    output:
+      downstream_callers:
+        - function_name: "send_invoice"
+          file_path: "src/notifications/invoice.py"
+          project_path: "demo-group/notification-service"
+          owner: "maria"
+        - function_name: "process_subscription"
+          file_path: "src/billing/subscriptions.py"
+          project_path: "demo-group/billing-service"
+          owner: "sven"
+      centrality_score: 12.0
+      affected_owners: ["maria", "sven"]

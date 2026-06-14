@@ -1,0 +1,63 @@
+{
+  "description": "Expected MergeGuard output for the demo scenario",
+  "scenario": "MR-A changes charge_user signature; MR-B adds callers of old signature",
+  "collisions": [
+    {
+      "mr_a_id": 1001,
+      "mr_a_iid": 23,
+      "mr_a_project": "demo-group/payments-service",
+      "mr_a_title": "feat: add currency support to charge_user",
+      "mr_b_id": 1002,
+      "mr_b_iid": 7,
+      "mr_b_project": "demo-group/notification-service",
+      "mr_b_title": "feat: add invoice notification and subscription renewal",
+      "intersecting_symbol": "charge_user",
+      "mr_a_changes": "`def charge_user(amount: float) -> bool` → `def charge_user(amount: float, currency: str = 'USD') -> bool`",
+      "mr_b_depends_on": "calls `charge_user` (with old signature: charge_user(amount))",
+      "severity": 0.78,
+      "severity_label": "high",
+      "centrality_score": 12.0,
+      "affected_callers": [
+        {
+          "function_name": "send_invoice",
+          "file_path": "src/notifications/invoice.py",
+          "project_path": "demo-group/notification-service",
+          "owner": "maria"
+        },
+        {
+          "function_name": "send_subscription_renewal",
+          "file_path": "src/notifications/invoice.py",
+          "project_path": "demo-group/notification-service",
+          "owner": "maria"
+        },
+        {
+          "function_name": "process_subscription",
+          "file_path": "src/billing/subscriptions.py",
+          "project_path": "demo-group/billing-service",
+          "owner": "sven"
+        },
+        {
+          "function_name": "handle_checkout",
+          "file_path": "src/orders/checkout.py",
+          "project_path": "demo-group/orders-service",
+          "owner": "maria"
+        }
+      ],
+      "affected_owners": ["maria", "sven"],
+      "suggested_order": "Merge `demo-group/notification-service!7` first (it calls `charge_user` with the current signature). Then update `demo-group/notification-service!7`'s callers to use the new API before merging `demo-group/payments-service!23`."
+    }
+  ],
+  "expected_comment_on_mr_a": "⚠️ MergeGuard: Semantic Collision Detected (Severity: HIGH)\n\nThis MR has a semantic conflict with demo-group/notification-service!7 — \"feat: add invoice notification and subscription renewal\"\n\nCollision on symbol: `charge_user`\n\n| | Action |\n|---|---|\n| This MR | `def charge_user(amount: float) -> bool` → `def charge_user(amount: float, currency: str = 'USD') -> bool` |\n| !7 | calls `charge_user` (with old signature: charge_user(amount)) |\n\nImpact: 4 caller(s) across 2 project(s)\nOwners to notify: @maria, @sven",
+  "orbit_queries_executed": [
+    {
+      "purpose": "Find callers of charge_user",
+      "query_type": "traversal",
+      "result_count": 12
+    },
+    {
+      "purpose": "Get centrality score",
+      "query_type": "aggregation",
+      "result": {"caller_count": 12}
+    }
+  ]
+}

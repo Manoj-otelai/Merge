@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MergeGuard — Collision Map</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">🛡️</span>
+        <span class="logo-text">MergeGuard</span>
+        <span class="logo-sub">Cross-MR Semantic Collision Sentinel</span>
+      </div>
+      <div class="stats" id="stats">
+        <div class="stat">
+          <span class="stat-value" id="stat-mrs">—</span>
+          <span class="stat-label">Open MRs</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="stat-collisions">—</span>
+          <span class="stat-label">Collisions</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="stat-updated">—</span>
+          <span class="stat-label">Last updated</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="layout">
+      <div class="graph-panel">
+        <div class="panel-header">
+          <h2>Collision Map</h2>
+          <p class="hint">Nodes = open MRs &nbsp;·&nbsp; Edges = semantic collisions &nbsp;·&nbsp; Click to inspect</p>
+        </div>
+        <div id="graph-container">
+          <svg id="collision-graph"></svg>
+          <div id="empty-state" class="empty-state hidden">
+            <div class="empty-icon">✅</div>
+            <div class="empty-title">No semantic collisions detected</div>
+            <div class="empty-sub">All open MRs have non-overlapping blast radii.</div>
+          </div>
+          <div id="loading-state" class="loading-state">
+            <div class="spinner"></div>
+            <div>Loading collision map…</div>
+          </div>
+        </div>
+        <div class="legend">
+          <div class="legend-item"><span class="dot critical"></span> Critical</div>
+          <div class="legend-item"><span class="dot high"></span> High</div>
+          <div class="legend-item"><span class="dot medium"></span> Medium</div>
+          <div class="legend-item"><span class="dot low"></span> Low</div>
+        </div>
+      </div>
+
+      <div class="detail-panel" id="detail-panel">
+        <div class="detail-placeholder" id="detail-placeholder">
+          <div class="detail-icon">👆</div>
+          <p>Click a node or edge to inspect collision details</p>
+        </div>
+        <div id="detail-content" class="hidden"></div>
+      </div>
+    </div>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"
+          integrity="sha512-vc58zeotzSzPgBAMFJuTZ85tDwwd3O7PHKnaa80W4UaxcK5Jme5bhg3/GY3rFM+oBFECuHRNX8sFhZE5BPAQQ=="
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="/static/collision_map.js"></script>
+</body>
+</html>

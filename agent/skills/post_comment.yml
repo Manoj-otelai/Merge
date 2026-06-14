@@ -1,0 +1,47 @@
+name: post-collision-comment
+display_name: "Post MR Collision Warning Comment"
+description: >
+  Posts structured collision warning comments to the affected GitLab merge
+  requests. Comments include severity badge, colliding MR reference, the
+  intersecting symbol, downstream callers discovered by Orbit, and a
+  suggested merge sequence to avoid the semantic break.
+
+  Comments are posted to BOTH MRs in the collision pair. Only collisions
+  with severity >= 0.1 trigger comments to reduce noise.
+version: "1.0.0"
+
+inputs:
+  - name: collisions
+    type: array
+    required: true
+    description: "ScoredCollision list from detect-collisions skill"
+  - name: mr_id
+    type: integer
+    required: true
+    description: "The MR that triggered this flow run"
+  - name: project_id
+    type: integer
+    required: true
+    description: "The project ID of the triggering MR"
+
+outputs:
+  - name: comment_urls
+    type: array
+    description: "GitLab URLs of all posted comments"
+  - name: comments_posted
+    type: integer
+    description: "Number of comments successfully posted"
+
+implementation:
+  type: http
+  url: "${MERGEGUARD_WEBHOOK_URL}/comment"
+  method: POST
+  headers:
+    Content-Type: "application/json"
+    Authorization: "Bearer ${MERGEGUARD_API_TOKEN}"
+  body_template: |
+    {
+      "collisions": {{ inputs.collisions | tojson }},
+      "mr_id": {{ inputs.mr_id }},
+      "project_id": {{ inputs.project_id }}
+    }

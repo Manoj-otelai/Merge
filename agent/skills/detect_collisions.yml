@@ -1,0 +1,48 @@
+name: detect-collisions
+display_name: "Detect Semantic MR Collisions"
+description: >
+  Registers the current MR's blast radius in the MergeGuard registry and
+  intersects it against all other open MRs to find semantic collisions.
+
+  A COLLISION exists when:
+  - MR-A changes a symbol S, and MR-B's code already calls S (SIGNATURE_CHANGE)
+  - Both MR-A and MR-B modify the same symbol S (PARALLEL_MODIFICATION)
+
+  This is the core novel capability: cross-MR blast radius intersection reveals
+  breakage that Git's textual merge can never see.
+version: "1.0.0"
+
+inputs:
+  - name: mr_id
+    type: integer
+    required: true
+    description: "Global MR ID from the webhook event"
+  - name: mr_iid
+    type: integer
+    required: true
+    description: "Project-scoped MR IID"
+  - name: blast_radius
+    type: object
+    required: true
+    description: "BlastRadius object from the query-orbit-blast-radius skill"
+
+outputs:
+  - name: collisions
+    type: array
+    description: "List of Collision objects sorted by severity descending"
+  - name: collision_count
+    type: integer
+    description: "Total number of semantic collisions detected"
+
+implementation:
+  type: http
+  url: "${MERGEGUARD_WEBHOOK_URL}/detect"
+  method: POST
+  headers:
+    Content-Type: "application/json"
+    Authorization: "Bearer ${MERGEGUARD_API_TOKEN}"
+  body_template: |
+    {
+      "mr_id": {{ inputs.mr_id }},
+      "blast_radius": {{ inputs.blast_radius | tojson }}
+    }

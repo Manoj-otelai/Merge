@@ -1,0 +1,60 @@
+name: mergeguard
+display_name: "MergeGuard — Cross-MR Semantic Collision Sentinel"
+description: >
+  Detects semantic collisions between simultaneously-open merge requests in a
+  GitLab group. Extracts changed function/class/method signatures from MR diffs,
+  queries Orbit for downstream callers and code owners across all repositories,
+  and warns teams when two MRs will silently break each other — even when Git
+  reports zero text conflicts.
+
+  Unlike single-MR blast-radius tools, MergeGuard maintains a live registry of
+  all open MR blast radii and intersects them to find cross-MR semantic collisions.
+  This reveals a new Orbit capability: using the knowledge graph as a cross-change
+  coordination layer, not just a per-change lookup.
+version: "1.0.0"
+type: external
+license: MIT
+
+endpoint:
+  url: "${MERGEGUARD_WEBHOOK_URL}/webhook/mr"
+  secret_token: "${MERGEGUARD_WEBHOOK_SECRET}"
+
+# Orbit MCP tools used by the AI agent steps in the flow
+tools:
+  - name: query_graph
+    description: "Traverse Orbit knowledge graph to find callers, owners, and centrality"
+  - name: get_graph_schema
+    description: "Inspect available node/edge types to adapt queries to Orbit version"
+
+triggers:
+  - event: merge_request
+    actions:
+      - opened
+      - updated
+      - synchronize
+      - reopened
+      - merged
+      - closed
+
+limits:
+  max_tokens: 8192
+  max_tool_calls: 20
+
+skills:
+  - extract-symbols
+  - query-orbit-blast-radius
+  - detect-collisions
+  - post-collision-comment
+
+metadata:
+  category: "Code Review"
+  tags:
+    - orbit
+    - merge-request
+    - semantic-analysis
+    - cross-repo
+    - collision-detection
+    - code-quality
+  ai_catalog_url: "https://gitlab.com/explore/ai-catalog/mergeguard"
+  source_url: "https://gitlab.com/your-group/mergeguard"
+  documentation_url: "https://gitlab.com/your-group/mergeguard/-/blob/main/README.md"

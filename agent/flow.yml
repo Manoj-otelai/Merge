@@ -1,0 +1,216 @@
+version: "v1"
+name: mergeguard-flow
+display_name: "MergeGuard Collision Detection Flow"
+description: >
+  Five-step orchestration flow: extract changed symbols from MR diff →
+  query Orbit for blast radius → intersect blast radii across open MRs →
+  score collision severity → post structured warnings to affected MRs.
+environment: chat-partial
+
+# ── Step 1: Extract changed symbols from the MR diff ──────────────────────
+components:
+  - name: extract_symbols
+    type: AgentComponent
+    prompt_id: extract_symbols_prompt
+    inputs:
+      - from: "context:goal"
+        as: "mr_event_json"
+      - from: "context:project_id"
+        as: "project_id"
+
+# ── Step 2: Query Orbit for downstream callers + owners ────────────────────
+  - name: query_orbit
+    type: AgentComponent
+    prompt_id: query_orbit_prompt
+    inputs:
+      - from: "extract_symbols.output"
+        as: "changed_symbols"
+      - from: "context:project_id"
+        as: "project_id"
+
+# ── Step 3: Intersect blast radii across all open MRs ─────────────────────
+  - name: detect_collisions
+    type: AgentComponent
+    prompt_id: detect_collisions_prompt
+    inputs:
+      - from: "query_orbit.output"
+        as: "blast_radius"
+      - from: "context:goal"
+        as: "mr_event_json"
+
+# ── Step 4: Score severity using Orbit centrality signals ─────────────────
+  - name: score_severity
+    type: AgentComponent
+    prompt_id: score_severity_prompt
+    inputs:
+      - from: "detect_collisions.output"
+        as: "collisions"
+      - from: "query_orbit.output"
+        as: "blast_radius"
+
+# ── Step 5: Post MR warning comments ──────────────────────────────────────
+  - name: post_comment
+    type: AgentComponent
+    prompt_id: post_comment_prompt
+    inputs:
+      - from: "score_severity.output"
+        as: "scored_collisions"
+      - from: "context:goal"
+        as: "mr_event_json"
+
+prompts:
+  - id: extract_symbols_prompt
+    content: |
+      You are the symbol extraction step of MergeGuard.
+
+      Input: `mr_event_json` — a GitLab merge_request webhook payload.
+      Task: Fetch the MR unified diff using the GitLab MR Diffs API and extract
+      all changed function, class, and method signatures.
+
+      Use the extract-symbols skill:
+        POST ${MERGEGUARD_WEBHOOK_URL}/extract
+        Body: { "project_id": <id>, "mr_iid": <iid> }
+
+      Filter to REMOVED and SIGNATURE_CHANGED symbols only (not newly-added ones).
+      Output: JSON array of SymbolChange objects.
+
+  - id: query_orbit_prompt
+    content: |
+      You are the Orbit blast-radius query step of MergeGuard.
+
+      Input: `changed_symbols` — list of SymbolChange objects from the previous step.
+
+      For each changed symbol, use query_graph to find all downstream callers.
+
+      First call get_graph_schema to discover available relationship types.
+      Then for each symbol, run a traversal query:
+
+      {
+        "query_type": "traversal",
+        "node": {
+          "id": "sym",
+          "entity": "Definition",
+          "columns": ["name", "definition_type", "file_path"],
+          "filters": {
+            "name": {"operator": "eq", "value": "<symbol_name>"},
+            "definition_type": {"operator": "in", "value": ["Function", "Method"]}
+          }
+        },
+        "relationships": [
+          {
+            "type": "REFERENCES",
+            "direction": "incoming",
+            "node": {
+              "id": "caller",
+              "entity": "Definition",
+              "columns": ["name", "definition_type", "file_path"]
+            },
+            "relationships": [
+              {
+                "type": "IN_PROJECT",
+                "direction": "outgoing",
+                "node": {
+                  "id": "proj",
+                  "entity": "Project",
+                  "columns": ["full_path", "name"]
+                }
+              }
+            ]
+          }
+        ],
+        "limit": 100
+      }
+
+      Also run a centrality count query:
+      {
+        "query_type": "aggregation",
+        "nodes": [
+          {"id": "sym", "entity": "Definition", "filters": {"name": {"operator": "eq", "value": "<symbol_name>"}}},
+          {"id": "caller", "entity": "Definition"}
+        ],
+        "relationships": [{"type": "REFERENCES", "from": "caller", "to": "sym"}],
+        "aggregations": [{"function": "count", "node_id": "caller", "alias": "caller_count"}]
+      }
+
+      IMPORTANT: Orbit only indexes the DEFAULT BRANCH. Callers found reflect
+      who calls this symbol on main — not what's in the feature branch.
+
+      Output: BlastRadius JSON object with changed_symbols, downstream_callers,
+              affected_owners, and centrality_score.
+
+  - id: detect_collisions_prompt
+    content: |
+      You are the collision intersection step of MergeGuard.
+
+      Input: `blast_radius` — the current MR's blast radius from Orbit.
+             `mr_event_json` — the webhook event to get the MR ID.
+
+      Use the detect-collisions skill to intersect this MR's blast radius
+      against all other open MRs in the registry:
+        POST ${MERGEGUARD_WEBHOOK_URL}/detect
+        Body: { "mr_id": <id>, "blast_radius": <BlastRadius> }
+
+      The service maintains a SQLite registry of all open MR blast radii.
+      A COLLISION exists when:
+      - MR-A changes symbol S AND MR-B's code calls S (SIGNATURE_CHANGE type)
+      - Both MR-A and MR-B change the same symbol S (PARALLEL_MODIFICATION type)
+
+      Output: List of Collision objects with intersecting_symbol, severity,
+              affected_callers, and suggested_merge_order.
+
+  - id: score_severity_prompt
+    content: |
+      You are the severity scoring step of MergeGuard.
+
+      Input: `collisions` — list of detected collisions.
+             `blast_radius` — Orbit blast radius data with centrality scores.
+
+      Score each collision:
+        severity = (centrality / 50.0) × owner_spread_factor × risk_factor
+
+      - centrality: caller_count from Orbit (normalized to 50 max callers)
+      - owner_spread_factor: distinct_projects / 5.0 (how many teams affected)
+      - risk_factor: REMOVED=1.0, SIGNATURE_CHANGED=0.75
+      - severity_label: critical(≥0.75), high(≥0.5), medium(≥0.25), low(<0.25)
+
+      Sort by severity descending.
+      Output: List of ScoredCollision objects.
+
+  - id: post_comment_prompt
+    content: |
+      You are the comment posting step of MergeGuard.
+
+      Input: `scored_collisions` — scored and sorted collision list.
+             `mr_event_json` — the webhook event to get MR IID and project ID.
+
+      For each collision with severity >= 0.1, post a warning comment to BOTH
+      affected MRs using the post-collision-comment skill:
+        POST ${MERGEGUARD_WEBHOOK_URL}/comment
+        Body: { "collisions": [...], "mr_id": <id> }
+
+      Comment format must include:
+      - Severity badge (emoji + label)
+      - Colliding MR reference with link
+      - Intersecting symbol name (in code block)
+      - Affected callers from Orbit (up to 5, with project paths)
+      - Suggested merge order
+      - Credit line: "Detected by MergeGuard via GitLab Orbit"
+
+      Output: List of comment URLs posted.
+
+flow:
+  start: extract_symbols
+  transitions:
+    - from: extract_symbols
+      to: query_orbit
+      condition: "{{ extract_symbols.output.symbols | length > 0 }}"
+    - from: query_orbit
+      to: detect_collisions
+    - from: detect_collisions
+      to: score_severity
+      condition: "{{ detect_collisions.output.collisions | length > 0 }}"
+    - from: score_severity
+      to: post_comment
+  terminal:
+    - extract_symbols
+    - post_comment

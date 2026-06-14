@@ -1,0 +1,123 @@
+"""GitLab REST API client for MR diffs, comments, and CI status."""
+from __future__ import annotations
+
+import logging
+import os
+from typing import Any, Optional
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+
+class GitLabClient:
+    def __init__(self, gitlab_url: str = "", token: str = "") -> None:
+        self.gitlab_url = gitlab_url or os.getenv("GITLAB_URL", "https://gitlab.com")
+        self.token = token or os.getenv("GITLAB_TOKEN", "")
+        self._http = httpx.AsyncClient(
+            base_url=self.gitlab_url,
+            headers={"PRIVATE-TOKEN": self.token},
+            timeout=30.0,
+        )
+
+    async def get_mr_diff(self, project_id: int, mr_iid: int) -> str:
+        """Return the unified diff text for a merge request."""
+        resp = await self._http.get(
+            f"/api/v4/projects/{project_id}/merge_requests/{mr_iid}/diffs",
+            params={"unidiff": "true", "per_page": 100},
+        )
+        resp.raise_for_status()
+        diffs = resp.json()
+        # GitLab returns a list of file diffs; concatenate into a single unified diff
+        parts: list[str] = []
+        for d in diffs:
+            if d.get("diff"):
+                old_path = d.get("old_path", d.get("new_path", ""))
+                new_path = d.get("new_path", old_path)
+                parts.append(f"--- a/{old_path}\n+++ b/{new_path}\n{d['diff']}")
+        return "\n".join(parts)
+
+    async def get_mr_info(self, project_id: int, mr_iid: int) -> dict:
+        """Return basic MR metadata."""
+        resp = await self._http.get(
+            f"/api/v4/projects/{project_id}/merge_requests/{mr_iid}"
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def post_mr_comment(
+        self, project_id: int, mr_iid: int, body: str
+    ) -> dict:
+        """Post a note (comment) on a merge request."""
+        resp = await self._http.post(
+            f"/api/v4/projects/{project_id}/merge_requests/{mr_iid}/notes",
+            json={"body": body},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_project(self, project_id: int) -> dict:
+        resp = await self._http.get(f"/api/v4/projects/{project_id}")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_pipeline_status(self, project_id: int, mr_iid: int) -> Optional[str]:
+        """Return the latest pipeline status for an MR."""
+        resp = await self._http.get(
+            f"/api/v4/projects/{project_id}/merge_requests/{mr_iid}/pipelines",
+            params={"per_page": 1},
+        )
+        if resp.status_code != 200:
+            return None
+        pipelines = resp.json()
+        if pipelines:
+            return pipelines[0].get("status")
+        return None
+
+    async def has_coverage_job(self, project_id: int, mr_iid: int) -> bool:
+        """Check if the MR's pipeline includes a coverage job."""
+        status = await self.get_pipeline_status(project_id, mr_iid)
+        if status not in ("success", "passed"):
+            return False
+        resp = await self._http.get(
+            f"/api/v4/projects/{project_id}/merge_requests/{mr_iid}/pipelines",
+            params={"per_page": 1},
+        )
+        if resp.status_code != 200:
+            return False
+        pipelines = resp.json()
+        if not pipelines:
+            return False
+        pipeline_id = pipelines[0]["id"]
+        jobs_resp = await self._http.get(
+            f"/api/v4/projects/{project_id}/pipelines/{pipeline_id}/jobs"
+        )
+        if jobs_resp.status_code != 200:
+            return False
+        jobs = jobs_resp.json()
+        return any("coverage" in (j.get("name", "").lower()) for j in jobs)
+
+    async def create_mr(
+        self,
+        project_id: int,
+        source_branch: str,
+        target_branch: str,
+        title: str,
+        description: str,
+    ) -> dict:
+        """Create a new merge request (used for auto-drafted fix MRs)."""
+        resp = await self._http.post(
+            f"/api/v4/projects/{project_id}/merge_requests",
+            json={
+                "source_branch": source_branch,
+                "target_branch": target_branch,
+                "title": title,
+                "description": description,
+                "remove_source_branch": True,
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def close(self) -> None:
+        await self._http.aclose()
