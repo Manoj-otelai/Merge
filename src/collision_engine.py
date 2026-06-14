@@ -132,17 +132,18 @@ class CollisionEngine:
             # Case 1: this MR changes S, other MR calls S (with old signature)
             for sym_name, sym_change in this_changed.items():
                 if sym_name in other_caller_names:
-                    callers = [c for c in other_br.downstream_callers if c.function_name == sym_name
-                               or sym_name in c.function_name]
-                    # Also include callers from this MR's blast radius for the same symbol
-                    callers += [c for c in this_br.downstream_callers if c.function_name == sym_name]
+                    # The real affected callers are the Orbit-resolved downstream
+                    # callers of S in the CHANGING MR's blast radius. Entries whose
+                    # function_name == S are dependency markers, not real callers.
+                    callers = [c for c in this_br.downstream_callers if c.function_name != sym_name]
                     score, label = score_collision(sym_change, callers, this_br.centrality_score)
                     order = suggest_merge_order(
                         this_br.mr_id, this_br.mr_iid, this_br.project_path,
                         other_br.mr_id, other_br.mr_iid, other_br.project_path,
                         sym_name, mr_a_changes=True,
                     )
-                    owners = list(set(this_br.affected_owners + other_br.affected_owners))
+                    # Owners of the concretely-affected call sites (deduped, stable order)
+                    owners = list(dict.fromkeys(c.owner for c in callers if c.owner))
                     collisions.append(Collision(
                         mr_a_id=this_br.mr_id,
                         mr_a_iid=this_br.mr_iid,
@@ -176,14 +177,16 @@ class CollisionEngine:
                     if already_added:
                         continue
 
-                    callers = [c for c in this_br.downstream_callers if c.function_name == sym_name]
+                    # Real affected callers live in the CHANGING MR (other_br).
+                    callers = [c for c in other_br.downstream_callers if c.function_name != sym_name]
                     score, label = score_collision(sym_change, callers, other_br.centrality_score)
                     order = suggest_merge_order(
                         other_br.mr_id, other_br.mr_iid, other_br.project_path,
                         this_br.mr_id, this_br.mr_iid, this_br.project_path,
                         sym_name, mr_a_changes=True,
                     )
-                    owners = list(set(this_br.affected_owners + other_br.affected_owners))
+                    # Owners of the concretely-affected call sites (deduped, stable order)
+                    owners = list(dict.fromkeys(c.owner for c in callers if c.owner))
                     collisions.append(Collision(
                         mr_a_id=this_br.mr_id,
                         mr_a_iid=this_br.mr_iid,

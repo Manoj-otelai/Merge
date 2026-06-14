@@ -49,6 +49,21 @@ Collision Map UI (D3.js): http://localhost:8080
 
 **Key design decision:** Orbit indexes the default branch only. MergeGuard extracts changed symbols from MR diffs directly, then uses Orbit to find who calls those symbols on `main`. This correctly identifies callers that will break after merge.
 
+## See it in 30 seconds (offline)
+
+No GitLab or Orbit connection required — seed deterministic demo data and open the UI:
+
+```bash
+pip install -r requirements.txt
+python -m demo.seed_local          # 3 open MRs, 2 HIGH-severity collisions
+uvicorn src.main:app --port 8080
+open http://localhost:8080
+```
+
+The collision map renders three MRs with two red collision edges on `charge_user`.
+Click any node or edge to inspect affected callers, owners, and the suggested merge order.
+A **Graph / List** toggle (top-right) switches between the force-directed view and a sortable list.
+
 ## Quick Start
 
 ### Option 1: One-command install

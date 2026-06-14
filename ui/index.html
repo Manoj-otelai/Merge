@@ -4,69 +4,135 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MergeGuard — Collision Map</title>
+  <meta name="description" content="Cross-MR Semantic Collision Sentinel powered by GitLab Orbit" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
   <header>
     <div class="header-inner">
       <div class="logo">
-        <span class="logo-icon">🛡️</span>
+        <span class="logo-mark">🛡️</span>
         <span class="logo-text">MergeGuard</span>
         <span class="logo-sub">Cross-MR Semantic Collision Sentinel</span>
       </div>
-      <div class="stats" id="stats">
-        <div class="stat">
-          <span class="stat-value" id="stat-mrs">—</span>
-          <span class="stat-label">Open MRs</span>
-        </div>
-        <div class="stat">
-          <span class="stat-value" id="stat-collisions">—</span>
-          <span class="stat-label">Collisions</span>
-        </div>
-        <div class="stat">
-          <span class="stat-value" id="stat-updated">—</span>
-          <span class="stat-label">Last updated</span>
-        </div>
+      <div class="header-right">
+        <span class="live-pill">
+          <span class="live-dot"></span>
+          <span>Live · updated <span id="last-updated">—</span></span>
+        </span>
+        <button class="btn" id="refresh-btn" title="Refresh now">
+          <span>↻</span><span>Refresh</span>
+        </button>
       </div>
     </div>
   </header>
 
+  <!-- ── Stat cards ─────────────────────────────────────────────────────── -->
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-label">Open MRs</span>
+        <span class="stat-icon violet">📋</span>
+      </div>
+      <span class="stat-value" id="stat-mrs">0</span>
+      <span class="stat-meta">tracked across the group</span>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-label">Collisions</span>
+        <span class="stat-icon red">⚠️</span>
+      </div>
+      <span class="stat-value" id="stat-collisions">0</span>
+      <span class="stat-meta">semantic conflicts detected</span>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-label">Highest severity</span>
+        <span class="stat-icon amber">🔥</span>
+      </div>
+      <span class="stat-value" id="stat-severity">—</span>
+      <span class="stat-meta" id="stat-severity-meta">no active risk</span>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-label">Callers at risk</span>
+        <span class="stat-icon green">📡</span>
+      </div>
+      <span class="stat-value" id="stat-callers">0</span>
+      <span class="stat-meta">downstream of changed symbols</span>
+    </div>
+  </div>
+
+  <!-- ── Main ───────────────────────────────────────────────────────────── -->
   <main>
     <div class="layout">
-      <div class="graph-panel">
+      <!-- Graph / list panel -->
+      <section class="panel">
         <div class="panel-header">
           <h2>Collision Map</h2>
-          <p class="hint">Nodes = open MRs &nbsp;·&nbsp; Edges = semantic collisions &nbsp;·&nbsp; Click to inspect</p>
-        </div>
-        <div id="graph-container">
-          <svg id="collision-graph"></svg>
-          <div id="empty-state" class="empty-state hidden">
-            <div class="empty-icon">✅</div>
-            <div class="empty-title">No semantic collisions detected</div>
-            <div class="empty-sub">All open MRs have non-overlapping blast radii.</div>
-          </div>
-          <div id="loading-state" class="loading-state">
-            <div class="spinner"></div>
-            <div>Loading collision map…</div>
+          <div class="view-toggle" id="view-toggle">
+            <button data-view="graph" class="active">Graph</button>
+            <button data-view="list">List</button>
           </div>
         </div>
-        <div class="legend">
-          <div class="legend-item"><span class="dot critical"></span> Critical</div>
-          <div class="legend-item"><span class="dot high"></span> High</div>
-          <div class="legend-item"><span class="dot medium"></span> Medium</div>
-          <div class="legend-item"><span class="dot low"></span> Low</div>
-        </div>
-      </div>
 
-      <div class="detail-panel" id="detail-panel">
+        <!-- Graph view -->
+        <div class="graph-body" id="graph-view">
+          <svg id="collision-graph"></svg>
+          <div class="graph-controls">
+            <button id="zoom-in" title="Zoom in">+</button>
+            <button id="zoom-out" title="Zoom out">−</button>
+            <button id="zoom-reset" title="Fit to view">⊡</button>
+          </div>
+
+          <div class="state-overlay" id="loading-state">
+            <div class="spinner"></div>
+            <div class="state-sub">Loading collision map…</div>
+          </div>
+
+          <div class="state-overlay hidden" id="empty-state">
+            <div class="state-icon ok">✅</div>
+            <div class="state-title">No semantic collisions</div>
+            <div class="state-sub">All open merge requests have non-overlapping blast radii. You're clear to merge.</div>
+          </div>
+        </div>
+
+        <!-- List view -->
+        <div class="list-body hidden" id="list-view"></div>
+
+        <div class="legend">
+          <span class="legend-item"><span class="legend-line critical"></span> Critical</span>
+          <span class="legend-item"><span class="legend-line high"></span> High</span>
+          <span class="legend-item"><span class="legend-line medium"></span> Medium</span>
+          <span class="legend-item"><span class="legend-line low"></span> Low</span>
+          <span class="legend-sep"></span>
+          <span class="legend-item"><span class="legend-node"></span> Safe MR</span>
+          <span class="legend-item"><span class="legend-node warn"></span> Colliding MR</span>
+        </div>
+      </section>
+
+      <!-- Detail panel -->
+      <aside class="panel detail-panel">
+        <div class="panel-header">
+          <h2>Details</h2>
+          <span class="hint">Click a node or edge</span>
+        </div>
         <div class="detail-placeholder" id="detail-placeholder">
-          <div class="detail-icon">👆</div>
-          <p>Click a node or edge to inspect collision details</p>
+          <div class="ph-icon">🔍</div>
+          <p>Select a merge request or a collision to inspect the affected symbols, callers, and owners.</p>
         </div>
         <div id="detail-content" class="hidden"></div>
-      </div>
+      </aside>
     </div>
   </main>
+
+  <footer>
+    Built with <strong>GitLab Orbit</strong> · MergeGuard reveals what your changes break in
+    <em>each other</em>, before you merge · <a href="https://gitlab.com/explore/ai-catalog" target="_blank" rel="noopener">View on AI Catalog</a>
+  </footer>
+
+  <div class="tooltip" id="tooltip"></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"
           integrity="sha512-vc58zeotzSzPgBAMFJuTZ85tDwwd3O7PHKnaa80W4UaxcK5Jme5bhg3/GY3rFM+oBFECuHRNX8sFhZE5BPAQQ=="

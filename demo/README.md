@@ -18,7 +18,28 @@ break each other after merge:
 **Expected MergeGuard output:** HIGH-severity collision warning on both MRs, listing
 4 downstream callers found by Orbit and the suggested merge order.
 
-## Prerequisites
+## Fastest path: offline demo (no GitLab/Orbit needed)
+
+To see the full collision map UI immediately with deterministic seeded data:
+
+```bash
+pip install -r requirements.txt
+
+# 1. Seed three open MRs with two HIGH-severity collisions on charge_user
+python -m demo.seed_local
+
+# 2. Start the server against the same database
+uvicorn src.main:app --port 8080
+
+# 3. Open the collision map
+open http://localhost:8080
+```
+
+You'll see three MR nodes, two red collision edges, live stats, and a
+clickable detail panel — all without any external services. This is the
+recommended setup for recording the demo video (it's fully reproducible).
+
+## Prerequisites (live mode)
 
 - GitLab group with Orbit Remote enabled
 - `glab` CLI authenticated

@@ -230,18 +230,35 @@ async def get_collisions(mr_id: int) -> dict:
         "mr_id": mr_id,
         "mr_iid": br.mr_iid,
         "mr_title": br.mr_title,
+        "mr_url": br.mr_url,
+        "project": br.project_path,
+        "author": br.author,
         "changed_symbols": len(br.changed_symbols),
         "downstream_callers": len(br.downstream_callers),
+        "changed_symbol_names": [s.name for s in br.changed_symbols],
         "collisions": [
             {
                 "other_mr_id": c.mr_b_id if mr_id == c.mr_a_id else c.mr_a_id,
                 "other_mr_iid": c.mr_b_iid if mr_id == c.mr_a_id else c.mr_a_iid,
                 "other_mr_title": c.mr_b_title if mr_id == c.mr_a_id else c.mr_a_title,
                 "other_mr_url": c.mr_b_url if mr_id == c.mr_a_id else c.mr_a_url,
+                "other_mr_project": c.mr_b_project if mr_id == c.mr_a_id else c.mr_a_project,
                 "symbol": c.intersecting_symbol,
+                "this_action": c.mr_a_changes if mr_id == c.mr_a_id else c.mr_b_depends_on,
+                "other_action": c.mr_b_depends_on if mr_id == c.mr_a_id else c.mr_a_changes,
                 "severity": c.severity,
                 "severity_label": c.severity_label.value,
                 "suggested_order": c.suggested_order,
+                "affected_owners": c.affected_owners,
+                "affected_callers": [
+                    {
+                        "function_name": ca.function_name,
+                        "file_path": ca.file_path,
+                        "project_path": ca.project_path,
+                        "owner": ca.owner,
+                    }
+                    for ca in c.affected_callers
+                ],
             }
             for c in collisions
         ],
