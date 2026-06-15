@@ -26,6 +26,10 @@
   // Stat animation state
   const statPrev = {};
 
+  // "Ask MergeGuard" — persists the last answer across live re-renders
+  let lastAskAnswer = "";
+  let lastAskQuestion = "";
+
   // ── Init ─────────────────────────────────────────────────────────────────
   function init() {
     document.getElementById("refresh-btn").onclick = fetchAndRender;
@@ -852,6 +856,23 @@
     const hrs = Math.round(cs.engineer_hours || 0);
 
     let html = `
+      <div class="ask-box">
+        <div class="insight-title">Ask MergeGuard</div>
+        <div class="ask-input-row">
+          <input id="ask-input" class="search-input" type="text" autocomplete="off"
+                 placeholder="e.g. What does !23 break? · Which MRs are safe to merge?"
+                 value="${esc(lastAskQuestion)}" />
+          <button id="ask-send" class="autofix-btn" style="width:auto;margin-top:0;white-space:nowrap">Ask</button>
+        </div>
+        <div class="ask-suggestions">
+          <button class="ask-chip" data-q="Which of my open MRs are safe to merge today?">Safe to merge?</button>
+          <button class="ask-chip" data-q="What's the riskiest collision right now?">Riskiest collision</button>
+          <button class="ask-chip" data-q="What's the merge order?">Merge order</button>
+          <button class="ask-chip" data-q="How much has MergeGuard saved us?">Savings</button>
+        </div>
+        <div class="ask-answer ${lastAskAnswer ? "" : "hidden"}" id="ask-answer">${lastAskAnswer}</div>
+      </div>
+
       <div class="cost-hero">
         <div class="cost-amount">${compactMoney(cs.dollars || 0, cs.currency)}</div>
         <div class="cost-label">estimated cost of incidents prevented before merge</div>
@@ -877,6 +898,40 @@
     }
 
     el.innerHTML = html;
+    wireAsk();
+  }
+
+  function wireAsk() {
+    const input = document.getElementById("ask-input");
+    const send = document.getElementById("ask-send");
+    if (!input || !send) return;
+    const run = () => askMergeGuard(input.value);
+    send.onclick = run;
+    input.onkeydown = (e) => { if (e.key === "Enter") run(); };
+    document.querySelectorAll(".ask-chip").forEach((chip) => {
+      chip.onclick = () => { input.value = chip.dataset.q; askMergeGuard(chip.dataset.q); };
+    });
+  }
+
+  async function askMergeGuard(question) {
+    question = (question || "").trim();
+    if (!question) return;
+    lastAskQuestion = question;
+    const out = document.getElementById("ask-answer");
+    if (out) { out.classList.remove("hidden"); out.innerHTML = `<span class="ask-thinking">Thinking…</span>`; }
+    try {
+      const resp = await fetch("/api/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question }),
+      });
+      if (!resp.ok) throw new Error("API " + resp.status);
+      const data = await resp.json();
+      lastAskAnswer = `<div class="ask-q">${esc(question)}</div><div class="ask-a">${mdCode(data.answer || "")}</div>`;
+    } catch {
+      lastAskAnswer = `<div class="ask-a" style="color:var(--critical)">Sorry — couldn't reach the collision graph.</div>`;
+    }
+    if (out) out.innerHTML = lastAskAnswer;
   }
 
   function barBlock(title, items, labelFn) {

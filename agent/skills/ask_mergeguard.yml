@@ -1,0 +1,36 @@
+name: ask-mergeguard
+display_name: "Ask MergeGuard"
+description: >
+  Answer natural-language questions about cross-MR semantic collisions using the
+  live MergeGuard collision graph, merge plan, and analytics. Lets a developer
+  ask, in chat, which of their open MRs are safe to merge, what a given MR
+  breaks, who they need to coordinate with, the optimal merge order, and how
+  much breakage MergeGuard has prevented.
+version: "1.0.0"
+type: external
+
+inputs:
+  - name: question
+    type: string
+    required: true
+    description: "The developer's natural-language question."
+
+endpoint:
+  method: POST
+  url: "${MERGEGUARD_WEBHOOK_URL}/api/ask"
+  body:
+    question: "{{ inputs.question }}"
+
+examples:
+  - question: "Which of my open MRs are safe to merge today?"
+  - question: "What does !142 break?"
+  - question: "Who do I need to coordinate with to merge !142?"
+  - question: "What's the riskiest collision right now?"
+  - question: "How much has MergeGuard saved us?"
+  - question: "What's the merge order?"
+
+output:
+  description: >
+    Returns { answer, intent, data }. `answer` is a chat-ready string; `data`
+    carries the structured backing (collisions, owners, plan, or analytics)
+    drawn from Orbit's cross-repo graph traversal.

@@ -97,6 +97,33 @@ class GitLabClient:
         jobs = jobs_resp.json()
         return any("coverage" in (j.get("name", "").lower()) for j in jobs)
 
+    async def set_commit_status(
+        self,
+        project_id: int,
+        sha: str,
+        state: str,
+        name: str = "mergeguard",
+        description: str = "",
+        target_url: str = "",
+    ) -> dict:
+        """Set an external commit status (CI/CD merge gate, Phase 4.2).
+
+        `state` is one of: pending, running, success, failed, canceled.
+        Combined with 'Pipelines must succeed' / required status checks, a
+        `failed` status blocks merge until the collision is resolved.
+        """
+        payload: dict = {"state": state, "name": name}
+        if description:
+            payload["description"] = description[:140]
+        if target_url:
+            payload["target_url"] = target_url
+        resp = await self._http.post(
+            f"/api/v4/projects/{project_id}/statuses/{sha}",
+            json=payload,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def get_default_branch(self, project_id: int) -> str:
         """Return the project's default branch (e.g. 'main')."""
         proj = await self.get_project(project_id)

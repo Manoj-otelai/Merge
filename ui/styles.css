@@ -920,6 +920,30 @@ kbd {
 .confidence-fill { height: 100%; background: var(--accent); }
 .confidence-val { font-size: 11.5px; font-weight: 600; color: var(--text-soft); }
 
+/* ── Ask MergeGuard ─────────────────────────────────────────────────────── */
+.ask-box {
+  border: 1px solid var(--accent-border); background: var(--accent-soft);
+  border-radius: var(--radius); padding: 14px; margin-bottom: 18px;
+}
+.ask-input-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.ask-input-row .search-input { padding-left: 11px; }
+.ask-suggestions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ask-chip {
+  font-family: inherit; font-size: 11.5px; font-weight: 500;
+  color: var(--accent); background: var(--surface);
+  border: 1px solid var(--accent-border); border-radius: var(--radius-pill);
+  padding: 4px 11px; cursor: pointer; transition: background 0.15s;
+}
+.ask-chip:hover { background: #fff; }
+.ask-answer {
+  margin-top: 12px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 12px; font-size: 13px; line-height: 1.55;
+}
+.ask-answer .ask-q { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-style: italic; }
+.ask-answer .ask-a { color: var(--text); white-space: pre-wrap; }
+.ask-answer .ask-a code { background: var(--accent-soft); color: var(--accent); padding: 1px 5px; border-radius: 4px; }
+.ask-thinking { color: var(--text-muted); }
+
 @media (max-width: 1320px) {
   .stats-row { grid-template-columns: repeat(3, 1fr); }
 }
