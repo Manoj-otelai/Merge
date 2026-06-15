@@ -5,33 +5,100 @@
   "use strict";
 
   const POLL_INTERVAL = 30_000;
-  const SEV_RANK = { low: 1, medium: 2, high: 3, critical: 4 };
+  const SEV_RANK  = { low: 1, medium: 2, high: 3, critical: 4 };
   const SEV_COLOR = { low: "#12b76a", medium: "#dc9a04", high: "#e8590c", critical: "#d92d20" };
   const HAS_D3 = typeof d3 !== "undefined";
 
   let svg, root, linkLayer, labelLayer, nodeLayer, zoom, simulation, tooltip;
   let width = 0, height = 0;
   let currentData = { nodes: [], edges: [] };
-  let selected = null;            // { type:'node'|'edge', id }
+  let nodeMap = new Map();              // id → node, updated on each render
+  let selected = null;                 // { type:'node'|'edge', id }
   let currentView = "graph";
 
-  // ── Init ──────────────────────────────────────────────────────────────────
+  // Filter state (list view)
+  let filterSev = "all";
+  let searchQuery = "";
+  let listSelectedIdx = -1;
+
+  // Stat animation state
+  const statPrev = {};
+
+  // ── Init ─────────────────────────────────────────────────────────────────
   function init() {
-    // Controls that work regardless of D3 availability
     document.getElementById("refresh-btn").onclick = fetchAndRender;
+
     document.querySelectorAll("#view-toggle button").forEach((btn) => {
       btn.onclick = () => switchView(btn.dataset.view);
     });
 
+    // Collisions stat card → switch to list view
+    const collCard = document.getElementById("stat-collisions-card");
+    if (collCard) {
+      collCard.onclick = () => switchView("list");
+      collCard.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); switchView("list"); } };
+    }
+
+    // Filter pills
+    document.querySelectorAll(".filter-pill").forEach((pill) => {
+      pill.onclick = () => {
+        filterSev = pill.dataset.sev;
+        document.querySelectorAll(".filter-pill").forEach((p) => p.classList.remove("active"));
+        pill.classList.add("active");
+        listSelectedIdx = -1;
+        renderList(currentData);
+      };
+    });
+
+    // Search input
+    const searchEl = document.getElementById("list-search");
+    if (searchEl) {
+      searchEl.oninput = (e) => {
+        searchQuery = e.target.value.toLowerCase().trim();
+        listSelectedIdx = -1;
+        renderList(currentData);
+      };
+    }
+
+    // Keyboard shortcuts
+    document.addEventListener("keydown", handleKeyDown);
+
     if (HAS_D3) {
       initGraph();
     } else {
-      // Graceful degradation: no force graph, but stats + list still work.
       degradeToList();
     }
 
     fetchAndRender();
     setInterval(fetchAndRender, POLL_INTERVAL);
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === "Escape" && selected) {
+      clearSelection();
+      e.preventDefault();
+      return;
+    }
+    if (currentView === "list") {
+      const rows = Array.from(document.querySelectorAll(".collision-row"));
+      if (!rows.length) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        listSelectedIdx = Math.min(listSelectedIdx + 1, rows.length - 1);
+        focusListRow(rows, listSelectedIdx);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        listSelectedIdx = Math.max(listSelectedIdx - 1, 0);
+        focusListRow(rows, listSelectedIdx);
+      } else if (e.key === "Enter" && listSelectedIdx >= 0 && rows[listSelectedIdx]) {
+        rows[listSelectedIdx].click();
+      }
+    }
+  }
+
+  function focusListRow(rows, idx) {
+    rows.forEach((r, i) => r.classList.toggle("selected", i === idx));
+    rows[idx]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
   function initGraph() {
@@ -45,9 +112,9 @@
     svg.on("click", (e) => { if (e.target === svg.node()) clearSelection(); });
 
     root = svg.append("g");
-    linkLayer = root.append("g").attr("class", "links");
+    linkLayer  = root.append("g").attr("class", "links");
     labelLayer = root.append("g").attr("class", "link-labels");
-    nodeLayer = root.append("g").attr("class", "nodes");
+    nodeLayer  = root.append("g").attr("class", "nodes");
 
     simulation = d3.forceSimulation()
       .force("link", d3.forceLink().id((d) => d.id).distance(190).strength(0.45))
@@ -58,8 +125,8 @@
       .force("collide", d3.forceCollide().radius((d) => nodeRadius(d) + 34))
       .on("tick", onTick);
 
-    document.getElementById("zoom-in").onclick = () => svg.transition().duration(220).call(zoom.scaleBy, 1.3);
-    document.getElementById("zoom-out").onclick = () => svg.transition().duration(220).call(zoom.scaleBy, 1 / 1.3);
+    document.getElementById("zoom-in").onclick    = () => svg.transition().duration(220).call(zoom.scaleBy, 1.3);
+    document.getElementById("zoom-out").onclick   = () => svg.transition().duration(220).call(zoom.scaleBy, 1 / 1.3);
     document.getElementById("zoom-reset").onclick = fitToView;
 
     window.addEventListener("resize", debounce(() => {
@@ -77,17 +144,18 @@
     });
     document.getElementById("graph-view").classList.add("hidden");
     document.getElementById("list-view").classList.remove("hidden");
+    document.getElementById("list-toolbar").classList.remove("hidden");
     document.getElementById("loading-state").classList.add("hidden");
   }
 
   function sizeSvg() {
     const container = document.getElementById("graph-view");
-    width = container.clientWidth || 800;
+    width  = container.clientWidth  || 800;
     height = container.clientHeight || 520;
     svg.attr("viewBox", `0 0 ${width} ${height}`);
   }
 
-  // ── Data fetch ──────────────────────────────────────────────────────────
+  // ── Data fetch ────────────────────────────────────────────────────────────
   async function fetchAndRender() {
     try {
       const resp = await fetch("/api/collision-map");
@@ -105,39 +173,78 @@
     }
   }
 
-  // ── Stats ─────────────────────────────────────────────────────────────────
+  // ── Stats (with count-up animation) ──────────────────────────────────────
+  function animateCount(id, to) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const from = statPrev[id] ?? 0;
+    statPrev[id] = to;
+    if (from === to) { el.textContent = to; return; }
+    const dur = 520;
+    const t0 = performance.now();
+    const step = (now) => {
+      const t = Math.min((now - t0) / dur, 1);
+      const eased = 1 - Math.pow(1 - t, 3);   // ease-out cubic
+      el.textContent = Math.round(from + (to - from) * eased);
+      if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
   function updateStats(data) {
     const mrs = data.open_mrs ?? 0;
     const collisions = data.total_collisions ?? 0;
-    setText("stat-mrs", mrs);
-    setText("stat-collisions", collisions);
+    animateCount("stat-mrs", mrs);
+    animateCount("stat-collisions", collisions);
 
     let topSev = null;
     (data.edges || []).forEach((e) => {
       if (!topSev || SEV_RANK[e.severity_label] > SEV_RANK[topSev]) topSev = e.severity_label;
     });
-    const sevEl = document.getElementById("stat-severity");
+    const sevEl  = document.getElementById("stat-severity");
     const metaEl = document.getElementById("stat-severity-meta");
     if (topSev) {
-      sevEl.textContent = topSev.toUpperCase();
-      sevEl.style.color = SEV_COLOR[topSev];
+      sevEl.textContent  = topSev.toUpperCase();
+      sevEl.style.color  = SEV_COLOR[topSev];
       metaEl.textContent = "needs coordination";
     } else {
-      sevEl.textContent = "—";
-      sevEl.style.color = "";
+      sevEl.textContent  = "—";
+      sevEl.style.color  = "";
       metaEl.textContent = "no active risk";
     }
 
     const callers = (data.nodes || []).reduce((s, n) => s + (n.caller_count || 0), 0);
-    setText("stat-callers", callers);
+    animateCount("stat-callers", callers);
+
+    // Update filter pill counts whenever data refreshes
+    updateFilterCounts(data);
   }
 
-  // ── Graph render ──────────────────────────────────────────────────────────
+  function updateFilterCounts(data) {
+    const counts = { all: 0, critical: 0, high: 0, medium: 0, low: 0 };
+    (data.edges || []).forEach((e) => {
+      counts.all++;
+      if (counts.hasOwnProperty(e.severity_label)) counts[e.severity_label]++;
+    });
+    document.querySelectorAll(".filter-pill").forEach((p) => {
+      const sev = p.dataset.sev;
+      const n = counts[sev] || 0;
+      const label = sev === "all" ? "All" : cap(sev);
+      p.textContent = `${label}${n > 0 ? ` (${n})` : ""}`;
+    });
+  }
+
+  // ── Graph render ───────────────────────────────────────────────────────────
   function render(data) {
     const hasMrs = (data.nodes || []).length > 0;
     document.getElementById("empty-state").classList.toggle("hidden", hasMrs || currentView !== "graph");
     svg.classed("hidden", !hasMrs);
-    if (!hasMrs) { linkLayer.selectAll("*").remove(); nodeLayer.selectAll("*").remove(); labelLayer.selectAll("*").remove(); return; }
+    if (!hasMrs) {
+      linkLayer.selectAll("*").remove();
+      nodeLayer.selectAll("*").remove();
+      labelLayer.selectAll("*").remove();
+      return;
+    }
 
     // Preserve positions across refreshes
     const posById = new Map(simulation.nodes().map((n) => [n.id, n]));
@@ -147,23 +254,34 @@
     });
     const edges = data.edges.map((e) => Object.assign({}, e));
 
+    // Build node lookup for tooltips
+    nodeMap = new Map(nodes.map((n) => [n.id, n]));
+
     // ── Links (curved arcs) ──
-    const link = linkLayer.selectAll("path.link")
+    linkLayer.selectAll("path.link")
       .data(edges, (d) => `${d.source}::${d.target}::${d.symbol}`)
       .join(
         (enter) => enter.append("path")
           .attr("class", (d) => `link ${d.severity_label}`)
           .attr("stroke-width", (d) => linkWidth(d))
           .on("click", (e, d) => { e.stopPropagation(); onEdgeClick(d); })
-          .on("mouseover", (e, d) => showTip(e, `<div class="tt-title">⚡ ${esc(d.symbol)}</div><div class="tt-sub">${cap(d.severity_label)} severity collision</div>`))
+          .on("mouseover", (e, d) => {
+            const sid = typeof d.source === "object" ? d.source.id : d.source;
+            const tid = typeof d.target === "object" ? d.target.id : d.target;
+            const src = nodeMap.get(sid) || {};
+            const tgt = nodeMap.get(tid) || {};
+            showTip(e, `<div class="tt-title">⚡ ${esc(d.symbol)}</div><div class="tt-sub">${cap(d.severity_label)} collision · !${src.iid || "?"} ↔ !${tgt.iid || "?"}</div>`);
+          })
           .on("mousemove", moveTip)
           .on("mouseout", hideTip),
-        (update) => update.attr("class", (d) => `link ${d.severity_label}`).attr("stroke-width", (d) => linkWidth(d)),
+        (update) => update
+          .attr("class", (d) => `link ${d.severity_label}`)
+          .attr("stroke-width", (d) => linkWidth(d)),
         (exit) => exit.remove()
       );
 
     // ── Link labels ──
-    const labelSel = labelLayer.selectAll("g.link-label-group")
+    labelLayer.selectAll("g.link-label-group")
       .data(edges, (d) => `${d.source}::${d.target}::${d.symbol}`)
       .join(
         (enter) => {
@@ -174,11 +292,11 @@
         },
         (update) => update,
         (exit) => exit.remove()
-      );
-    labelSel.select("text").text((d) => d.symbol);
+      )
+      .select("text").text((d) => d.symbol);
 
     // ── Nodes ──
-    const node = nodeLayer.selectAll("g.node")
+    nodeLayer.selectAll("g.node")
       .data(nodes, (d) => d.id)
       .join(
         (enter) => {
@@ -201,9 +319,9 @@
         (exit) => exit.remove()
       );
 
-    node.select("circle").attr("r", (d) => nodeRadius(d));
-    node.select(".node-iid").text((d) => `!${d.iid}`);
-    node.select(".node-label")
+    nodeLayer.selectAll("g.node").select("circle").attr("r", (d) => nodeRadius(d));
+    nodeLayer.selectAll("g.node").select(".node-iid").text((d) => `!${d.iid}`);
+    nodeLayer.selectAll("g.node").select(".node-label")
       .attr("y", (d) => nodeRadius(d) + 15)
       .text((d) => truncate(projectShort(d.project), 18));
 
@@ -211,7 +329,6 @@
     simulation.force("link").links(edges);
     simulation.alpha(0.7).restart();
 
-    // Re-apply selection styling
     applySelectionStyles();
   }
 
@@ -229,7 +346,7 @@
     nodeLayer.selectAll("g.node").attr("transform", (d) => `translate(${d.x},${d.y})`);
   }
 
-  // ── Geometry helpers ──────────────────────────────────────────────────────
+  // ── Geometry helpers ───────────────────────────────────────────────────────
   function linkArc(d) {
     const s = d.source, t = d.target;
     if (s.x == null || t.x == null) return "M0,0";
@@ -247,7 +364,7 @@
     return `translate(${mx + (-dy / len) * off},${my + (dx / len) * off})`;
   }
   function nodeRadius(d) { return 20 + Math.min(d.caller_count || 0, 24) * 0.7; }
-  function linkWidth(d) { return 1.5 + (SEV_RANK[d.severity_label] || 1) * 1.1; }
+  function linkWidth(d)   { return 1.5 + (SEV_RANK[d.severity_label] || 1) * 1.1; }
 
   function isColliding(id) {
     return (currentData.edges || []).some((e) => edgeHas(e, id));
@@ -258,7 +375,7 @@
     return s === id || t === id;
   }
 
-  // ── Hover highlight ────────────────────────────────────────────────────────
+  // ── Hover highlight ──────────────────────────────────────────────────────
   function hoverHighlight(id, on) {
     if (selected) return;
     const neighbors = new Set([id]);
@@ -272,10 +389,10 @@
     linkLayer.selectAll("path.link").classed("dimmed", (d) => on && !edgeHas(d, id));
   }
 
-  // ── Selection ──────────────────────────────────────────────────────────────
+  // ── Selection ────────────────────────────────────────────────────────────
   function applySelectionStyles() {
-    nodeLayer.selectAll("g.node").classed("selected", (d) => selected && selected.type === "node" && selected.id === d.id);
-    linkLayer.selectAll("path.link").classed("selected", (d) => selected && selected.type === "edge" && selected.id === edgeKey(d));
+    nodeLayer.selectAll("g.node").classed("selected", (d) => selected?.type === "node" && selected.id === d.id);
+    linkLayer.selectAll("path.link").classed("selected", (d) => selected?.type === "edge" && selected.id === edgeKey(d));
   }
   function edgeKey(d) {
     const s = typeof d.source === "object" ? d.source.id : d.source;
@@ -284,25 +401,32 @@
   }
   function clearSelection() {
     selected = null;
-    nodeLayer.selectAll("g.node").classed("selected", false).classed("dimmed", false);
-    linkLayer.selectAll("path.link").classed("selected", false).classed("dimmed", false);
+    if (HAS_D3) {
+      nodeLayer.selectAll("g.node").classed("selected", false).classed("dimmed", false);
+      linkLayer.selectAll("path.link").classed("selected", false).classed("dimmed", false);
+    }
+    // Clear row selection in list
+    document.querySelectorAll(".collision-row").forEach((r) => r.classList.remove("selected"));
+    listSelectedIdx = -1;
     showPlaceholder();
   }
 
-  // ── Click handlers ──────────────────────────────────────────────────────────
+  // ── Click handlers ─────────────────────────────────────────────────────────
   async function onNodeClick(d) {
     selected = { type: "node", id: d.id };
-    applySelectionStyles();
-    hoverHighlight(d.id, false);
-    const neighbors = new Set([d.id]);
-    (currentData.edges || []).forEach((e) => {
-      const s = typeof e.source === "object" ? e.source.id : e.source;
-      const t = typeof e.target === "object" ? e.target.id : e.target;
-      if (s === d.id) neighbors.add(t);
-      if (t === d.id) neighbors.add(s);
-    });
-    nodeLayer.selectAll("g.node").classed("dimmed", (n) => !neighbors.has(n.id));
-    linkLayer.selectAll("path.link").classed("dimmed", (e) => !edgeHas(e, d.id));
+    if (HAS_D3) {
+      applySelectionStyles();
+      hoverHighlight(d.id, false);
+      const neighbors = new Set([d.id]);
+      (currentData.edges || []).forEach((e) => {
+        const s = typeof e.source === "object" ? e.source.id : e.source;
+        const t = typeof e.target === "object" ? e.target.id : e.target;
+        if (s === d.id) neighbors.add(t);
+        if (t === d.id) neighbors.add(s);
+      });
+      nodeLayer.selectAll("g.node").classed("dimmed", (n) => !neighbors.has(n.id));
+      linkLayer.selectAll("path.link").classed("dimmed", (e) => !edgeHas(e, d.id));
+    }
 
     try {
       const resp = await fetch(`/api/collisions/${d.id}`);
@@ -315,16 +439,19 @@
 
   async function onEdgeClick(d) {
     selected = { type: "edge", id: edgeKey(d) };
-    applySelectionStyles();
+    if (HAS_D3) {
+      applySelectionStyles();
+      linkLayer.selectAll("path.link").classed("dimmed", (e) => edgeKey(e) !== selected.id);
+      nodeLayer.selectAll("g.node").classed("dimmed", (n) => !edgeHas(d, n.id));
+    }
+
     const sId = typeof d.source === "object" ? d.source.id : d.source;
-    linkLayer.selectAll("path.link").classed("dimmed", (e) => edgeKey(e) !== selected.id);
-    nodeLayer.selectAll("g.node").classed("dimmed", (n) => !edgeHas(d, n.id));
+    const tId = typeof d.target === "object" ? d.target.id : d.target;
 
     try {
       const resp = await fetch(`/api/collisions/${sId}`);
       if (!resp.ok) throw new Error();
       const info = await resp.json();
-      const tId = typeof d.target === "object" ? d.target.id : d.target;
       const collision = (info.collisions || []).find((c) => c.other_mr_id === tId && c.symbol === d.symbol)
         || (info.collisions || []).find((c) => c.symbol === d.symbol);
       renderEdgeDetail(info, collision, d);
@@ -333,7 +460,7 @@
     }
   }
 
-  // ── Detail panel ────────────────────────────────────────────────────────────
+  // ── Detail panel ─────────────────────────────────────────────────────────
   function showPlaceholder() {
     document.getElementById("detail-placeholder").classList.remove("hidden");
     document.getElementById("detail-content").classList.add("hidden");
@@ -365,7 +492,10 @@
       </div>`;
 
     if (collisions.length === 0) {
-      html += `<div class="section"><div class="empty-inline">✅ No collisions — safe to merge.</div></div>`;
+      html += `
+        <div class="section">
+          <div class="empty-inline">✅ No collisions — safe to merge.</div>
+        </div>`;
     } else {
       html += `<div class="section"><div class="section-title">Collisions (${collisions.length})</div>`;
       collisions.forEach((c) => {
@@ -376,7 +506,9 @@
               ${badge(c.severity_label)}
             </div>
             <div class="mr-iid">collides with</div>
-            <div class="mr-title">${c.other_mr_url ? `<a href="${esc(c.other_mr_url)}" target="_blank" rel="noopener">!${c.other_mr_iid} ${esc(truncate(c.other_mr_title || "", 36))}</a>` : `!${c.other_mr_iid} ${esc(truncate(c.other_mr_title || "", 36))}`}</div>
+            <div class="mr-title">${c.other_mr_url
+              ? `<a href="${esc(c.other_mr_url)}" target="_blank" rel="noopener">!${c.other_mr_iid} ${esc(truncate(c.other_mr_title || "", 36))}</a>`
+              : `!${c.other_mr_iid} ${esc(truncate(c.other_mr_title || "", 36))}`}</div>
             <div class="mr-project">${esc(c.other_mr_project || "")}</div>
             ${c.suggested_order ? `<div class="advice" style="margin-top:10px"><span class="advice-icon">🧭</span><span>${esc(c.suggested_order)}</span></div>` : ""}
           </div>`;
@@ -387,12 +519,9 @@
   }
 
   function renderEdgeDetail(info, c, edge) {
-    if (!c) {
-      renderError("Collision detail unavailable.");
-      return;
-    }
+    if (!c) { renderError("Collision detail unavailable."); return; }
     const callers = c.affected_callers || [];
-    const owners = c.affected_owners || [];
+    const owners  = c.affected_owners  || [];
 
     let html = `
       <div class="detail-hero">
@@ -412,7 +541,9 @@
         <div class="vs-divider">collides with</div>
         <div class="mr-card">
           <div class="mr-iid">!${c.other_mr_iid}</div>
-          <div class="mr-title">${c.other_mr_url ? `<a href="${esc(c.other_mr_url)}" target="_blank" rel="noopener">${esc(truncate(c.other_mr_title || "", 40))}</a>` : esc(truncate(c.other_mr_title || "", 40))}</div>
+          <div class="mr-title">${c.other_mr_url
+            ? `<a href="${esc(c.other_mr_url)}" target="_blank" rel="noopener">${esc(truncate(c.other_mr_title || "", 40))}</a>`
+            : esc(truncate(c.other_mr_title || "", 40))}</div>
           <div class="mr-project">${esc(c.other_mr_project || "")}</div>
         </div>
         <div style="margin-top:12px">
@@ -423,7 +554,9 @@
 
     if (owners.length) {
       html += `<div class="section"><div class="section-title">Owners to notify</div><div class="owner-chips">`;
-      owners.forEach((o) => { html += `<span class="owner-chip"><span class="caller-avatar">${esc(initials(o))}</span>@${esc(o)}</span>`; });
+      owners.forEach((o) => {
+        html += `<span class="owner-chip"><span class="caller-avatar">${esc(initials(o))}</span>@${esc(o)}</span>`;
+      });
       html += `</div></div>`;
     }
 
@@ -440,6 +573,9 @@
             ${ca.owner ? `<span class="caller-owner">@${esc(ca.owner)}</span>` : ""}
           </li>`;
       });
+      if (callers.length > 8) {
+        html += `<li style="padding:9px 0;font-size:12px;color:var(--text-muted)">+ ${callers.length - 8} more caller${callers.length - 8 > 1 ? "s" : ""}…</li>`;
+      }
       html += `</ul></div>`;
     }
 
@@ -449,21 +585,25 @@
     showContent(html);
   }
 
-  // ── List view ───────────────────────────────────────────────────────────────
+  // ── List view ──────────────────────────────────────────────────────────────
   function switchView(view) {
     if (view === "graph" && !HAS_D3) return;
     currentView = view;
+    listSelectedIdx = -1;
     document.querySelectorAll("#view-toggle button").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
-    const graphView = document.getElementById("graph-view");
-    const listView = document.getElementById("list-view");
+    const graphView  = document.getElementById("graph-view");
+    const listView   = document.getElementById("list-view");
+    const toolbar    = document.getElementById("list-toolbar");
     if (view === "graph") {
       graphView.classList.remove("hidden");
       listView.classList.add("hidden");
+      toolbar.classList.add("hidden");
       sizeSvg();
       simulation.alpha(0.3).restart();
     } else {
       graphView.classList.add("hidden");
       listView.classList.remove("hidden");
+      toolbar.classList.remove("hidden");
       renderList(currentData);
     }
   }
@@ -471,28 +611,54 @@
   function renderList(data) {
     const listView = document.getElementById("list-view");
     const nodeById = new Map((data.nodes || []).map((n) => [n.id, n]));
-    const edges = (data.edges || []).slice().sort((a, b) => (b.severity || 0) - (a.severity || 0));
+    let edges = (data.edges || []).slice().sort((a, b) => (b.severity || 0) - (a.severity || 0));
+
+    // Apply severity filter
+    if (filterSev !== "all") {
+      edges = edges.filter((e) => e.severity_label === filterSev);
+    }
+
+    // Apply search filter
+    if (searchQuery) {
+      edges = edges.filter((e) => {
+        const s = nodeById.get(typeof e.source === "object" ? e.source.id : e.source) || {};
+        const t = nodeById.get(typeof e.target === "object" ? e.target.id : e.target) || {};
+        return (
+          (e.symbol || "").toLowerCase().includes(searchQuery) ||
+          (s.title   || "").toLowerCase().includes(searchQuery) ||
+          (t.title   || "").toLowerCase().includes(searchQuery) ||
+          (s.project || "").toLowerCase().includes(searchQuery) ||
+          (t.project || "").toLowerCase().includes(searchQuery)
+        );
+      });
+    }
 
     if (!edges.length) {
-      listView.innerHTML = `
-        <div class="state-overlay" style="position:relative">
-          <div class="state-icon ok">✅</div>
-          <div class="state-title">No semantic collisions</div>
-          <div class="state-sub">All open merge requests have non-overlapping blast radii.</div>
-        </div>`;
+      const noCollisions = (data.edges || []).length === 0;
+      listView.innerHTML = noCollisions
+        ? `<div class="list-empty">
+            <div class="empty-icon">✅</div>
+            <div class="empty-title">No semantic collisions</div>
+            <div class="empty-sub">All open merge requests have non-overlapping blast radii. You're clear to merge.</div>
+           </div>`
+        : `<div class="list-empty">
+            <div class="empty-icon">🔍</div>
+            <div class="empty-title">No matches</div>
+            <div class="empty-sub">No collisions match your current filter. Try adjusting the search or selecting a different severity.</div>
+           </div>`;
       return;
     }
 
-    listView.innerHTML = edges.map((e) => {
+    listView.innerHTML = edges.map((e, i) => {
       const s = nodeById.get(typeof e.source === "object" ? e.source.id : e.source) || {};
       const t = nodeById.get(typeof e.target === "object" ? e.target.id : e.target) || {};
       return `
-        <div class="collision-row" data-source="${s.id}" data-target="${t.id}" data-symbol="${esc(e.symbol)}">
+        <div class="collision-row" data-idx="${i}" data-source="${s.id}" data-target="${t.id}" data-symbol="${esc(e.symbol)}" tabindex="0" role="button" aria-label="Collision on ${esc(e.symbol)} between !${s.iid} and !${t.iid}">
           <span class="row-sev ${e.severity_label}"></span>
           <span class="row-main">
             <span class="row-symbol">⚡ ${esc(e.symbol)}</span>
             <span class="row-pair"><span class="mr-ref">!${s.iid}</span> ${esc(projectShort(s.project))} ↔ <span class="mr-ref">!${t.iid}</span> ${esc(projectShort(t.project))}</span>
-            <span class="row-meta">${esc(truncate(s.title || "", 36))}</span>
+            <span class="row-meta">${esc(truncate(s.title || "", 38))}</span>
           </span>
           ${badge(e.severity_label)}
         </div>`;
@@ -500,6 +666,9 @@
 
     listView.querySelectorAll(".collision-row").forEach((row) => {
       row.onclick = () => {
+        listSelectedIdx = parseInt(row.dataset.idx, 10);
+        listView.querySelectorAll(".collision-row").forEach((r) => r.classList.remove("selected"));
+        row.classList.add("selected");
         const edge = {
           source: Number(row.dataset.source),
           target: Number(row.dataset.target),
@@ -510,10 +679,11 @@
         ) || edge;
         onEdgeClick(full);
       };
+      row.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); row.click(); } };
     });
   }
 
-  // ── Fit to view ──────────────────────────────────────────────────────────────
+  // ── Fit to view ─────────────────────────────────────────────────────────────
   function fitToView() {
     const nodes = simulation.nodes();
     if (!nodes.length) return;
@@ -523,22 +693,22 @@
     const pad = 80;
     const w = (maxX - minX) + pad * 2, h = (maxY - minY) + pad * 2;
     const scale = Math.min(width / w, height / h, 1.4);
-    const tx = width / 2 - scale * (minX + maxX) / 2;
+    const tx = width  / 2 - scale * (minX + maxX) / 2;
     const ty = height / 2 - scale * (minY + maxY) / 2;
     svg.transition().duration(450).call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
   }
 
-  // ── Drag ──────────────────────────────────────────────────────────────────────
+  // ── Drag ───────────────────────────────────────────────────────────────────
   function dragStart(e, d) { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }
-  function dragged(e, d) { d.fx = e.x; d.fy = e.y; }
-  function dragEnd(e, d) { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }
+  function dragged(e, d)   { d.fx = e.x; d.fy = e.y; }
+  function dragEnd(e, d)   { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }
 
-  // ── Tooltip ─────────────────────────────────────────────────────────────────
+  // ── Tooltip ──────────────────────────────────────────────────────────────
   function showTip(e, html) { tooltip.html(html).style("opacity", 1); moveTip(e); }
-  function moveTip(e) { tooltip.style("left", e.pageX + 14 + "px").style("top", e.pageY - 10 + "px"); }
-  function hideTip() { tooltip.style("opacity", 0); }
+  function moveTip(e)       { tooltip.style("left", e.pageX + 14 + "px").style("top", e.pageY - 10 + "px"); }
+  function hideTip()        { tooltip.style("opacity", 0); }
 
-  // ── Utils ───────────────────────────────────────────────────────────────────
+  // ── Utils ─────────────────────────────────────────────────────────────────
   function badge(label) {
     if (!label) return "";
     return `<span class="badge ${label}"><span class="badge-dot"></span>${cap(label)}</span>`;

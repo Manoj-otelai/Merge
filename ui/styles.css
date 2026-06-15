@@ -696,3 +696,129 @@ footer a { color: var(--text-soft); font-weight: 500; }
   .stats-row, main { padding-left: 16px; padding-right: 16px; }
   .stats-row { grid-template-columns: 1fr; }
 }
+
+/* ── Clickable stat cards ────────────────────────────────────────────────── */
+.stat-card.clickable {
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.12s;
+}
+.stat-card.clickable:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+}
+.stat-card.clickable:active { transform: translateY(0); }
+.stat-card.clickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── List toolbar ───────────────────────────────────────────────────────── */
+.list-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  flex-shrink: 0;
+}
+
+.search-wrap { position: relative; }
+.search-icon-wrap {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+}
+.search-input {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  padding: 8px 11px 8px 34px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  -webkit-appearance: none;
+}
+.search-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.search-input::placeholder { color: var(--text-muted); }
+.search-input::-webkit-search-cancel-button { cursor: pointer; }
+
+.filter-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.filter-pill {
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-soft);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 4px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.filter-pill:hover { border-color: var(--border-strong); color: var(--text); background: var(--surface-2); }
+.filter-pill.active {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent);
+  font-weight: 600;
+}
+.filter-pill[data-sev="critical"].active { background: var(--critical-bg); border-color: #fecdca; color: var(--critical); }
+.filter-pill[data-sev="high"].active    { background: var(--high-bg);     border-color: #f9dbca; color: var(--high); }
+.filter-pill[data-sev="medium"].active  { background: var(--medium-bg);   border-color: #fdedb0; color: var(--medium); }
+.filter-pill[data-sev="low"].active     { background: var(--low-bg);      border-color: #a6f4c5; color: var(--low); }
+
+/* ── Collision row: selection ────────────────────────────────────────────── */
+.collision-row.selected { background: var(--accent-soft); }
+.collision-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* ── List empty state (filtered) ────────────────────────────────────────── */
+.list-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 48px 24px;
+  text-align: center;
+}
+.list-empty .empty-icon {
+  width: 48px; height: 48px;
+  display: grid; place-items: center;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 20px;
+}
+.list-empty .empty-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.list-empty .empty-sub { font-size: 12.5px; color: var(--text-muted); max-width: 240px; }
+
+/* ── Keyboard hint in placeholder ───────────────────────────────────────── */
+.ph-hint {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text-soft);
+}
