@@ -97,6 +97,60 @@ class GitLabClient:
         jobs = jobs_resp.json()
         return any("coverage" in (j.get("name", "").lower()) for j in jobs)
 
+    async def get_default_branch(self, project_id: int) -> str:
+        """Return the project's default branch (e.g. 'main')."""
+        proj = await self.get_project(project_id)
+        return proj.get("default_branch", "main")
+
+    async def get_file_content(
+        self, project_id: int, file_path: str, ref: str = "main"
+    ) -> Optional[str]:
+        """Fetch raw file content at a ref. Returns None on 404."""
+        from urllib.parse import quote
+
+        encoded = quote(file_path, safe="")
+        resp = await self._http.get(
+            f"/api/v4/projects/{project_id}/repository/files/{encoded}/raw",
+            params={"ref": ref},
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.text
+
+    async def create_branch(
+        self, project_id: int, branch: str, ref: str
+    ) -> dict:
+        """Create a new branch from `ref`."""
+        resp = await self._http.post(
+            f"/api/v4/projects/{project_id}/repository/branches",
+            params={"branch": branch, "ref": ref},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def commit_files(
+        self,
+        project_id: int,
+        branch: str,
+        message: str,
+        files: list[dict],
+    ) -> dict:
+        """Commit multiple file updates in one commit via the commits API.
+
+        `files`: [{"path": str, "content": str}] — all treated as updates.
+        """
+        actions = [
+            {"action": "update", "file_path": f["path"], "content": f["content"]}
+            for f in files
+        ]
+        resp = await self._http.post(
+            f"/api/v4/projects/{project_id}/repository/commits",
+            json={"branch": branch, "commit_message": message, "actions": actions},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def create_mr(
         self,
         project_id: int,

@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .autofix import generate_fix
 from .collision_engine import CollisionEngine
 from .gitlab_client import GitLabClient
 from .models import BlastRadius
@@ -41,6 +42,24 @@ orbit: OrbitClient
 UI_DIR = Path(__file__).parent.parent / "ui"
 DB_PATH = os.getenv("MERGEGUARD_DB", "mergeguard.db")
 WEBHOOK_SECRET = os.getenv("GITLAB_WEBHOOK_SECRET", "")
+
+# Phase 1.2 — auto-fix MR generation (opt-in; never runs in the live demo unless set)
+AUTOFIX_ENABLED = os.getenv("MERGEGUARD_AUTOFIX_ENABLED", "false").lower() == "true"
+# Optional local mirror of repo sources, used for offline auto-fix preview/demo.
+SOURCE_DIR = os.getenv("MERGEGUARD_SOURCE_DIR", "")
+
+
+def _local_source(project_path: str, file_path: str) -> Optional[str]:
+    """Read source from a local repo mirror (MERGEGUARD_SOURCE_DIR), if configured."""
+    if not SOURCE_DIR:
+        return None
+    candidate = Path(SOURCE_DIR) / project_path / file_path
+    try:
+        if candidate.is_file():
+            return candidate.read_text()
+    except OSError:
+        pass
+    return None
 
 
 @asynccontextmanager
@@ -180,9 +199,14 @@ async def handle_mr_webhook(request: Request) -> dict:
         logger.warning("Merge plan computation failed: %s", exc)
 
     # Step 5: Post MR comments for each collision
+    base_url = os.getenv("MERGEGUARD_PUBLIC_URL", "").rstrip("/")
     comments_posted = 0
     for collision in collisions:
-        comment_body = collision.format_comment(mr_id, merge_plan_text)
+        autofix_url = (
+            f"{base_url}/api/autofix/{mr_id}?symbol={collision.intersecting_symbol}"
+            if AUTOFIX_ENABLED and base_url else ""
+        )
+        comment_body = collision.format_comment(mr_id, merge_plan_text, autofix_url)
         try:
             await gitlab.post_mr_comment(project_id, mr_iid, comment_body)
             comments_posted += 1
@@ -195,9 +219,13 @@ async def handle_mr_webhook(request: Request) -> dict:
                 collision.mr_b_iid if mr_id == collision.mr_a_id else collision.mr_a_iid
             )
             try:
+                other_autofix_url = (
+                    f"{base_url}/api/autofix/{other_project_id}?symbol={collision.intersecting_symbol}"
+                    if AUTOFIX_ENABLED and base_url else ""
+                )
                 await gitlab.post_mr_comment(
                     other_project_id, other_iid,
-                    collision.format_comment(other_project_id, merge_plan_text),
+                    collision.format_comment(other_project_id, merge_plan_text, other_autofix_url),
                 )
             except Exception as exc:
                 logger.warning("Could not comment on other MR !%s: %s", other_iid, exc)
@@ -279,6 +307,103 @@ async def get_collisions(mr_id: int) -> dict:
 async def get_merge_plan() -> dict:
     """Return the global optimal merge order across all open MRs."""
     return engine.get_merge_plan().to_dict()
+
+
+@app.post("/api/autofix/{mr_id}")
+async def autofix(mr_id: int, symbol: str | None = None) -> dict:
+    """Generate (and, if enabled, open) a consumer-side auto-fix MR.
+
+    Always returns a dry-run plan (AST-validated patches). When
+    MERGEGUARD_AUTOFIX_ENABLED=true and a GitLab token is configured, it also
+    creates the branch, commits the patches, and opens a draft MR per project.
+    """
+    br = engine.get_blast_radius(mr_id)
+    if not br:
+        raise HTTPException(status_code=404, detail=f"MR {mr_id} not found in registry")
+
+    collisions = engine.find_collisions(mr_id)
+    if not collisions:
+        return {"status": "no_collisions", "mr_id": mr_id}
+
+    collision = None
+    if symbol:
+        collision = next((c for c in collisions if c.intersecting_symbol == symbol), None)
+    collision = collision or collisions[0]  # highest severity (already sorted)
+
+    sym_name = collision.intersecting_symbol
+    other_id = collision.mr_b_id if mr_id == collision.mr_a_id else collision.mr_a_id
+
+    # Resolve the SymbolChange object from whichever MR actually changes it.
+    changer_br = br if sym_name in br.changed_symbol_names() else engine.get_blast_radius(other_id)
+    if not changer_br:
+        raise HTTPException(status_code=409, detail="Could not resolve the changing MR for this symbol")
+    sym_change = next((s for s in changer_br.changed_symbols if s.name == sym_name), None)
+    if not sym_change:
+        raise HTTPException(status_code=409, detail=f"Symbol {sym_name} not found among changed symbols")
+
+    callers = collision.affected_callers
+
+    # Pre-fetch caller sources (GitLab first, then local mirror) so the pure
+    # generator can run synchronously.
+    sources: dict[tuple, Optional[str]] = {}
+    for c in callers:
+        src: Optional[str] = None
+        if gitlab.token:
+            try:
+                ref = await gitlab.get_default_branch(c.project_id)
+                src = await gitlab.get_file_content(c.project_id, c.file_path, ref)
+            except Exception as exc:
+                logger.warning("Auto-fix source fetch failed for %s: %s", c.file_path, exc)
+        if src is None:
+            src = _local_source(c.project_path, c.file_path)
+        sources[(c.project_id, c.file_path)] = src
+
+    other_iid = collision.mr_b_iid if mr_id == collision.mr_a_id else collision.mr_a_iid
+    plan = generate_fix(
+        sym_change, callers,
+        source_provider=lambda pid, path: sources.get((pid, path)),
+        other_mr_iid=other_iid,
+    )
+
+    applied = None
+    if AUTOFIX_ENABLED and plan.fixable and gitlab.token:
+        applied = await _apply_autofix(plan)
+
+    return {
+        "status": "ok",
+        "mr_id": mr_id,
+        "symbol": sym_name,
+        "enabled": AUTOFIX_ENABLED,
+        "applied": applied,
+        "plan": plan.to_dict(),
+    }
+
+
+async def _apply_autofix(plan) -> list[dict]:
+    """Create a branch, commit patches, and open a draft MR per affected project."""
+    by_project: dict[int, list] = {}
+    for p in plan.patches:
+        by_project.setdefault(p.project_id, []).append(p)
+
+    results: list[dict] = []
+    for project_id, patches in by_project.items():
+        try:
+            ref = await gitlab.get_default_branch(project_id)
+            await gitlab.create_branch(project_id, plan.branch_name, ref)
+            await gitlab.commit_files(
+                project_id, plan.branch_name,
+                message=f"MergeGuard auto-fix: update callers of {plan.symbol}",
+                files=[{"path": p.file_path, "content": p.new_content} for p in patches],
+            )
+            mr = await gitlab.create_mr(
+                project_id, plan.branch_name, ref,
+                title=plan.title, description=plan.description,
+            )
+            results.append({"project_id": project_id, "mr_url": mr.get("web_url", ""), "ok": True})
+        except Exception as exc:
+            logger.error("Auto-fix apply failed for project %s: %s", project_id, exc)
+            results.append({"project_id": project_id, "ok": False, "error": str(exc)})
+    return results
 
 
 @app.get("/api/mrs")

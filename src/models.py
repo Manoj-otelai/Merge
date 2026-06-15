@@ -110,7 +110,12 @@ class Collision:
     explanation: str = ""
     score_factors: dict = field(default_factory=dict)
 
-    def format_comment(self, perspective_mr_id: int, merge_plan_text: str = "") -> str:
+    def format_comment(
+        self,
+        perspective_mr_id: int,
+        merge_plan_text: str = "",
+        autofix_url: str = "",
+    ) -> str:
         """Format a MR comment from the perspective of one of the two MRs."""
         if perspective_mr_id == self.mr_a_id:
             other_iid = self.mr_b_iid
@@ -170,6 +175,7 @@ This MR has a **semantic conflict** with [{other_project}!{other_iid}]({other_ur
 {caller_details}
 {why_section}{plan_section}
 **Suggested merge order:** {self.suggested_order}
+{f"{chr(10)}🔧 [**Draft the consumer-side fix**]({autofix_url}) — MergeGuard will rewrite the affected call sites and open a draft MR." if autofix_url else ""}
 
 > _Detected by [MergeGuard](https://gitlab.com/ai-catalog/mergeguard) via GitLab Orbit cross-repo graph traversal._
 > _Orbit queried {len(self.affected_callers)} downstream callers across the dependency graph._"""
