@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional
 
 import httpx
 
@@ -61,7 +60,7 @@ class GitLabClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def get_pipeline_status(self, project_id: int, mr_iid: int) -> Optional[str]:
+    async def get_pipeline_status(self, project_id: int, mr_iid: int) -> str | None:
         """Return the latest pipeline status for an MR."""
         resp = await self._http.get(
             f"/api/v4/projects/{project_id}/merge_requests/{mr_iid}/pipelines",
@@ -131,7 +130,7 @@ class GitLabClient:
 
     async def get_file_content(
         self, project_id: int, file_path: str, ref: str = "main"
-    ) -> Optional[str]:
+    ) -> str | None:
         """Fetch raw file content at a ref. Returns None on 404."""
         from urllib.parse import quote
 

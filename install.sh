@@ -40,22 +40,8 @@ ok "Dependencies installed"
 # ── Environment configuration ────────────────────────────────────────────────
 if [[ ! -f ".env" ]]; then
   info "Creating .env from template..."
-  cat > .env << 'EOF'
-# Required
-GITLAB_URL=https://gitlab.com
-GITLAB_TOKEN=your-personal-access-token-here
-GITLAB_WEBHOOK_SECRET=generate-a-random-secret-here
-
-# Orbit configuration
-# Set ORBIT_USE_LOCAL=true to use glab orbit local (DuckDB) instead of Remote
-ORBIT_USE_LOCAL=false
-
-# MergeGuard configuration
-MERGEGUARD_DB=mergeguard.db
-MERGEGUARD_WEBHOOK_URL=http://localhost:8080
-MERGEGUARD_API_TOKEN=generate-an-api-token-here
-EOF
-  ok ".env created — edit it with your GitLab credentials before starting"
+  cp .env.example .env
+  ok ".env created from .env.example — edit it with your GitLab credentials before starting"
 fi
 
 # ── AI Catalog skill registration ────────────────────────────────────────────
@@ -75,7 +61,7 @@ echo "       source .venv/bin/activate && uvicorn src.main:app --port 8080"
 echo "     or:"
 echo "       docker-compose up -d"
 echo "  3. Configure a GitLab group webhook:"
-echo "       URL: \$MERGEGUARD_WEBHOOK_URL/webhook/mr"
+echo "       URL: <your-mergeguard-host>/webhook/mr"
 echo "       Secret: \$GITLAB_WEBHOOK_SECRET"
 echo "       Trigger: Merge request events"
 echo "  4. Open the collision map: http://localhost:8080"

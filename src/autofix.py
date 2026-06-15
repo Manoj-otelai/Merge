@@ -26,15 +26,15 @@ from __future__ import annotations
 import ast
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Optional
 
 from .models import CallerInfo, ChangeType, SymbolChange
 
 logger = logging.getLogger(__name__)
 
 # (project_id, file_path) -> source text, or None if unavailable
-SourceProvider = Callable[[int, str], Optional[str]]
+SourceProvider = Callable[[int, str], str | None]
 
 
 @dataclass
@@ -148,7 +148,7 @@ def _parse_signature_params(signature: str) -> list[_Param]:
     return params
 
 
-def _added_param(old_sig: str, new_sig: str) -> Optional[_Param]:
+def _added_param(old_sig: str, new_sig: str) -> _Param | None:
     """Return the first parameter present in new_sig but not old_sig."""
     old = {p.name for p in _parse_signature_params(old_sig)}
     for p in _parse_signature_params(new_sig):
@@ -346,7 +346,7 @@ def generate_fix(
     return plan
 
 
-def _name_from_signature(signature: str) -> Optional[str]:
+def _name_from_signature(signature: str) -> str | None:
     m = re.search(r"(?:def|class)\s+(\w+)", signature)
     if m:
         return m.group(1)

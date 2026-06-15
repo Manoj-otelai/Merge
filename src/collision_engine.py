@@ -10,18 +10,15 @@ import json
 import logging
 import sqlite3
 import time
-from pathlib import Path
-from typing import Optional
 
+from .merge_sequencer import MergeEdge, MergePlan, MRNode, compute_merge_plan
 from .models import (
     BlastRadius,
     CallerInfo,
     Collision,
     CollisionMap,
-    Severity,
     SymbolChange,
 )
-from .merge_sequencer import MergeEdge, MergePlan, MRNode, compute_merge_plan
 from .severity_scorer import score_collision_detailed, suggest_merge_order
 
 logger = logging.getLogger(__name__)
@@ -125,7 +122,7 @@ class CollisionEngine:
         self._conn.execute("DELETE FROM blast_radii WHERE mr_id = ?", (mr_id,))
         self._conn.commit()
 
-    def get_blast_radius(self, mr_id: int) -> Optional[BlastRadius]:
+    def get_blast_radius(self, mr_id: int) -> BlastRadius | None:
         row = self._conn.execute(
             "SELECT * FROM blast_radii WHERE mr_id = ?", (mr_id,)
         ).fetchone()

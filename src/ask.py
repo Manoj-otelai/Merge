@@ -16,10 +16,9 @@ Examples it handles:
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 
-def _find_iid(question: str) -> Optional[int]:
+def _find_iid(question: str) -> int | None:
     m = re.search(r"!?\b(\d{1,7})\b", question)
     return int(m.group(1)) if m else None
 

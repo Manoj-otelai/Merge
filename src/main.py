@@ -16,12 +16,18 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()  # load .env if present so GITLAB_TOKEN etc. are available
+except ImportError:  # python-dotenv is optional at runtime
+    pass
 
 from . import ask as ask_module
 from .autofix import generate_fix
@@ -59,7 +65,7 @@ CI_GATE_MIN_SEVERITY = os.getenv("MERGEGUARD_CI_GATE_MIN_SEVERITY", "high").lowe
 _SEV_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
-def _local_source(project_path: str, file_path: str) -> Optional[str]:
+def _local_source(project_path: str, file_path: str) -> str | None:
     """Read source from a local repo mirror (MERGEGUARD_SOURCE_DIR), if configured."""
     if not SOURCE_DIR:
         return None
@@ -444,9 +450,9 @@ async def autofix(mr_id: int, symbol: str | None = None) -> dict:
 
     # Pre-fetch caller sources (GitLab first, then local mirror) so the pure
     # generator can run synchronously.
-    sources: dict[tuple, Optional[str]] = {}
+    sources: dict[tuple, str | None] = {}
     for c in callers:
-        src: Optional[str] = None
+        src: str | None = None
         if gitlab.token:
             try:
                 ref = await gitlab.get_default_branch(c.project_id)

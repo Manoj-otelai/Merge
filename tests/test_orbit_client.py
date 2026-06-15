@@ -1,16 +1,14 @@
 """Tests for the Orbit client (using mock responses)."""
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.orbit_client import OrbitClient
 from src.models import CallerInfo
+from src.orbit_client import OrbitClient
 from tests.fixtures.sample_orbit_responses import (
     CALLERS_OF_CHARGE_USER,
     CENTRALITY_CHARGE_USER,
     OWNERS_CHARGE_USER,
-    EMPTY_CALLERS,
 )
 
 

@@ -1,6 +1,6 @@
 """Tests for multi-language symbol extraction (Phase 5.1)."""
-from src.symbol_extractor import extract_from_diff
 from src.models import ChangeType, Language
+from src.symbol_extractor import extract_from_diff
 
 
 def diff(path: str, old_line: str, new_line: str) -> str:

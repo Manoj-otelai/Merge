@@ -1,21 +1,20 @@
 """Tests for the symbol extractor."""
-import pytest
 
 from src.models import ChangeType, Language
 from src.symbol_extractor import (
-    extract_from_diff,
-    _parse_python_signatures,
     _parse_js_signatures,
+    _parse_python_signatures,
+    extract_from_diff,
 )
 from tests.fixtures.sample_diffs import (
-    PYTHON_SIGNATURE_CHANGE,
-    PYTHON_NEW_CALLER,
-    PYTHON_RENAME,
-    PYTHON_REMOVED,
     JS_SIGNATURE_CHANGE,
-    TS_METHOD_CHANGE,
     PYTHON_BODY_ONLY,
+    PYTHON_NEW_CALLER,
     PYTHON_NEW_FILE,
+    PYTHON_REMOVED,
+    PYTHON_RENAME,
+    PYTHON_SIGNATURE_CHANGE,
+    TS_METHOD_CHANGE,
 )
 
 
@@ -114,7 +113,6 @@ class TestMultiFileDiff:
     def test_handles_multiple_files(self):
         combined = PYTHON_SIGNATURE_CHANGE + "\n" + JS_SIGNATURE_CHANGE
         changes = extract_from_diff(combined)
-        languages = {c.language for c in changes}
         # Should detect both Python and JS changes
         assert len(changes) > 1
 

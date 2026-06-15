@@ -1,6 +1,4 @@
 """Tests for the collision detection engine."""
-import os
-import tempfile
 
 import pytest
 
@@ -10,7 +8,6 @@ from src.models import (
     CallerInfo,
     ChangeType,
     Language,
-    Severity,
     SymbolChange,
 )
 

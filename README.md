@@ -223,7 +223,37 @@ Open `http://localhost:8080` to see the live D3.js collision graph:
 | `GITLAB_TOKEN` | Yes | — | PAT with `api` scope |
 | `GITLAB_WEBHOOK_SECRET` | Yes | — | Webhook validation token |
 | `ORBIT_USE_LOCAL` | No | `false` | Use `glab orbit local` (DuckDB) |
+| `ORBIT_CACHE` / `ORBIT_CACHE_TTL` | No | `true` / `300` | Blast-radius cache + TTL (seconds) |
 | `MERGEGUARD_DB` | No | `mergeguard.db` | SQLite database path |
+| `MERGEGUARD_PUBLIC_URL` | No | — | Public base URL for comment action links |
+| `MERGEGUARD_AUTOFIX_ENABLED` | No | `false` | Open draft consumer-side fix MRs |
+| `MERGEGUARD_SOURCE_DIR` | No | — | Local repo mirror for offline auto-fix preview |
+| `MERGEGUARD_CI_GATE_ENABLED` | No | `false` | Set a blocking commit status on MRs |
+| `MERGEGUARD_CI_GATE_MIN_SEVERITY` | No | `high` | CI gate threshold |
+| `SLACK_BOT_TOKEN` / `SLACK_CHANNEL` | No | — | Enable Slack alerts |
+| `SLACK_MIN_SEVERITY` | No | `high` | Slack alert threshold |
+| `MERGEGUARD_COST_MODEL` | No | `config/cost_model.json` | Tunable cost assumptions |
+
+All variables load from `.env` automatically — copy `.env.example` to `.env`.
+
+## Capabilities
+
+Beyond detection, MergeGuard acts as a cross-MR orchestrator:
+
+| Capability | Endpoint | Notes |
+|-----------|----------|-------|
+| **Merge sequencing** | `GET /api/merge-plan` | Global topological merge order; flags mutually-colliding MRs as coordination groups |
+| **Auto-fix MR generation** | `POST /api/autofix/{mr_id}` | AST-validated consumer-side patches; opens a draft MR when enabled |
+| **Severity + confidence** | `GET /api/collisions/{mr_id}` | `centrality × untested-blast-zone × owner-spread × risk`, with a confidence and a plain-language "why this is dangerous" |
+| **Cost / time saved** | `GET /api/analytics` | Tunable cost model; hotspots, owner load, cumulative $ and engineer-hours saved |
+| **Ask MergeGuard** | `POST /api/ask` | NL Q&A: "what does !142 break?", "which MRs are safe to merge?" |
+| **Slack alerts** | (webhook) | `chat.postMessage` for collisions ≥ `SLACK_MIN_SEVERITY` |
+| **CI/CD merge gate** | `ci/mergeguard_gate.py` + commit status | Blocks merge on unresolved high-severity collisions |
+| **Orbit cache + metrics** | `GET /api/metrics` | Hit rate + p50/p95/p99 query latency |
+
+The collision-map UI has four tabs — **Graph**, **List**, **Plan**, **Insights** —
+plus an **"Ask MergeGuard"** box. Languages supported for symbol extraction:
+Python (AST), JavaScript/TypeScript, Go, Ruby, Java, Kotlin, Rust, C#, PHP.
 
 ## Running Tests
 

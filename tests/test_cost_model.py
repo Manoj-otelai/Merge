@@ -1,6 +1,6 @@
 """Tests for the cost model and analytics (Phase 2)."""
-from src.cost_model import CostModel
 from src.collision_engine import CollisionEngine
+from src.cost_model import CostModel
 from tests.test_collision_engine import make_blast_radius, make_caller, make_symbol
 
 

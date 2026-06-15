@@ -62,7 +62,7 @@ class CostModel:
         self.a = {**_DEFAULTS, **(assumptions or {})}
 
     @classmethod
-    def load(cls, path: str | None = None) -> "CostModel":
+    def load(cls, path: str | None = None) -> CostModel:
         p = Path(path or os.getenv("MERGEGUARD_COST_MODEL", str(_DEFAULT_PATH)))
         try:
             data = json.loads(p.read_text())

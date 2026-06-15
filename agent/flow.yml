@@ -166,14 +166,17 @@ prompts:
              `blast_radius` — Orbit blast radius data with centrality scores.
 
       Score each collision:
-        severity = (centrality / 50.0) × owner_spread_factor × risk_factor
+        severity = centrality_factor × untested_blast_zone × spread_term × risk_factor
 
-      - centrality: caller_count from Orbit (normalized to 50 max callers)
-      - owner_spread_factor: distinct_projects / 5.0 (how many teams affected)
-      - risk_factor: REMOVED=1.0, SIGNATURE_CHANGED=0.75
+      - centrality_factor: Orbit centrality blended with affected-caller count,
+        normalized so ~15 callers ≈ a highly central "fragile core" symbol
+      - untested_blast_zone: 1.0 (no coverage) … 0.7 (covered callers)
+      - spread_term: 0.55 + 0.45 × min(distinct_teams / 3, 1)
+      - risk_factor: REMOVED=1.0, RENAMED=0.95, SIGNATURE_CHANGED=0.8
       - severity_label: critical(≥0.75), high(≥0.5), medium(≥0.25), low(<0.25)
 
-      Sort by severity descending.
+      Also emit a confidence (0–1) and a plain-language "why this is dangerous"
+      explanation. Sort by severity descending.
       Output: List of ScoredCollision objects.
 
   - id: post_comment_prompt

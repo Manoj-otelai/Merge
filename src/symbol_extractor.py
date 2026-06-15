@@ -10,7 +10,6 @@ from __future__ import annotations
 import ast
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 from .models import ChangeType, Language, SymbolChange
 
@@ -63,10 +62,10 @@ def _parse_unified_diff(diff_text: str) -> list[FileDiff]:
                 # Collect all hunk lines until the next file header
                 hunk_lines: list[str] = []
                 while i < len(lines):
-                    l = lines[i]
-                    if l.startswith("--- ") or l.startswith("diff --git "):
+                    ln = lines[i]
+                    if ln.startswith("--- ") or ln.startswith("diff --git "):
                         break
-                    hunk_lines.append(l)
+                    hunk_lines.append(ln)
                     i += 1
 
                 if old_path == "/dev/null":
@@ -199,7 +198,7 @@ def _diff_python(fd: FileDiff) -> list[SymbolChange]:
 # name, so a change is only flagged when a known symbol's params change or it is
 # removed — which keeps these forgiving regexes from producing false positives.
 
-_REGEX_LANG_PATTERNS: dict[Language, tuple[list[re.Pattern], Optional[re.Pattern]]] = {
+_REGEX_LANG_PATTERNS: dict[Language, tuple[list[re.Pattern], re.Pattern | None]] = {
     Language.GO: (
         [re.compile(r"^func\s+(?:\([^)]*\)\s*)?(\w+)\s*\(([^)]*)\)", re.MULTILINE)],
         re.compile(r"^type\s+(\w+)\s+(?:struct|interface)", re.MULTILINE),
@@ -285,7 +284,6 @@ _CLASS_PATTERN = re.compile(r"^(?:export\s+)?(?:abstract\s+)?class\s+(\w+)", re.
 
 def _parse_js_signatures(source: str) -> dict[str, tuple[str, int]]:
     sigs: dict[str, tuple[str, int]] = {}
-    lines = source.splitlines()
 
     for pattern in _JS_FUNC_PATTERNS:
         for match in pattern.finditer(source):

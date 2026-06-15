@@ -15,7 +15,8 @@ import os
 import subprocess
 import time
 from collections import deque
-from typing import Any, Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 import httpx
 
@@ -259,5 +260,5 @@ class OrbitClient:
             ],
         }
         return mock_data.get(symbol_name, [
-            CallerInfo(f"caller_of_{symbol_name}", f"src/service/handler.py", "demo-group/consumer-service", project_id + 1, "engineer"),
+            CallerInfo(f"caller_of_{symbol_name}", "src/service/handler.py", "demo-group/consumer-service", project_id + 1, "engineer"),
         ])

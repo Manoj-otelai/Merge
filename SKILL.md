@@ -161,10 +161,15 @@ to use the new API before merging this MR.
 |--------|------|-------------|
 | `POST` | `/webhook/mr` | GitLab MR webhook receiver |
 | `GET` | `/api/collision-map` | Live collision graph (JSON for UI) |
-| `GET` | `/api/collisions/{mr_id}` | Collisions for a specific MR |
+| `GET` | `/api/collisions/{mr_id}` | Collisions for a specific MR (with confidence, explanation, savings) |
+| `GET` | `/api/merge-plan` | Global optimal merge order + coordination groups |
+| `GET` | `/api/analytics` | Cost/time saved, hotspots, owner load |
+| `POST`/`GET` | `/api/ask` | "Ask MergeGuard" natural-language Q&A |
+| `POST` | `/api/autofix/{mr_id}` | Generate (and optionally open) a consumer-side fix MR |
+| `GET` | `/api/metrics` | Orbit cache hit-rate + query latency percentiles |
 | `GET` | `/api/mrs` | List all tracked open MRs |
 | `GET` | `/` | Collision map visualization UI |
-| `GET` | `/health` | Liveness check |
+| `GET` | `/health` | Liveness check + feature flags |
 
 ## Languages Supported
 
@@ -177,15 +182,20 @@ to use the new API before merging this MR.
 ## Severity Scoring
 
 ```
-severity = (centrality / 50) × owner_spread_factor × change_risk_factor
+severity = centrality_factor × untested_blast_zone × spread_term × risk_factor
 
 severity_label:
   ≥ 0.75 → 🚨 CRITICAL
-  ≥ 0.50 → 🔴 HIGH  
+  ≥ 0.50 → 🔴 HIGH
   ≥ 0.25 → 🟠 MEDIUM
   <  0.25 → 🟡 LOW
 ```
 
-- **centrality**: number of callers found by Orbit (normalized)
-- **owner_spread_factor**: distinct teams/projects affected
-- **change_risk_factor**: REMOVED=1.0, RENAMED=0.9, SIGNATURE_CHANGED=0.75
+- **centrality_factor**: Orbit graph centrality blended with the affected-caller
+  count, normalized so ~15 callers ≈ a highly central "fragile core" symbol
+- **untested_blast_zone**: covered callers (behind a coverage job) lower the risk
+- **spread_term**: more distinct teams/projects affected = higher risk
+- **risk_factor**: REMOVED=1.0, RENAMED=0.95, SIGNATURE_CHANGED=0.8
+
+Each collision also carries a **confidence** (0–1) and a plain-language
+**"why this is dangerous"** explanation derived from the same signals.
