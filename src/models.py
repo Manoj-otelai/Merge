@@ -106,6 +106,9 @@ class Collision:
     affected_callers: list[CallerInfo] = field(default_factory=list)
     affected_owners: list[str] = field(default_factory=list)
     suggested_order: str = ""
+    confidence: float = 1.0
+    explanation: str = ""
+    score_factors: dict = field(default_factory=dict)
 
     def format_comment(self, perspective_mr_id: int) -> str:
         """Format a MR comment from the perspective of one of the two MRs."""
@@ -139,7 +142,12 @@ class Collision:
             if len(self.affected_callers) > 5:
                 caller_details += f"\n  - … and {len(self.affected_callers) - 5} more"
 
-        return f"""{emoji} **MergeGuard: Semantic Collision Detected** (Severity: **{self.severity_label.value.upper()}**)
+        confidence_pct = round(self.confidence * 100)
+        why_section = ""
+        if self.explanation:
+            why_section = f"\n<details><summary><b>Why this is dangerous</b></summary>\n\n{self.explanation}\n\n</details>\n"
+
+        return f"""{emoji} **MergeGuard: Semantic Collision Detected** (Severity: **{self.severity_label.value.upper()}** · {confidence_pct}% confidence)
 
 This MR has a **semantic conflict** with [{other_project}!{other_iid}]({other_url}) — *"{other_title}"*
 
@@ -153,7 +161,7 @@ This MR has a **semantic conflict** with [{other_project}!{other_iid}]({other_ur
 **Impact:** {callers_str} across {len(set(c.project_path for c in self.affected_callers))} project(s)
 **Owners to notify:** {owners_str}
 {caller_details}
-
+{why_section}
 **Suggested merge order:** {self.suggested_order}
 
 > _Detected by [MergeGuard](https://gitlab.com/ai-catalog/mergeguard) via GitLab Orbit cross-repo graph traversal._

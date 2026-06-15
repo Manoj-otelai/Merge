@@ -21,7 +21,7 @@ from .models import (
     Severity,
     SymbolChange,
 )
-from .severity_scorer import score_collision, suggest_merge_order
+from .severity_scorer import score_collision_detailed, suggest_merge_order
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +136,7 @@ class CollisionEngine:
                     # callers of S in the CHANGING MR's blast radius. Entries whose
                     # function_name == S are dependency markers, not real callers.
                     callers = [c for c in this_br.downstream_callers if c.function_name != sym_name]
-                    score, label = score_collision(sym_change, callers, this_br.centrality_score)
+                    scored = score_collision_detailed(sym_change, callers, this_br.centrality_score)
                     order = suggest_merge_order(
                         this_br.mr_id, this_br.mr_iid, this_br.project_path,
                         other_br.mr_id, other_br.mr_iid, other_br.project_path,
@@ -158,11 +158,14 @@ class CollisionEngine:
                         intersecting_symbol=sym_name,
                         mr_a_changes=sym_change.signature_summary(),
                         mr_b_depends_on=f"calls `{sym_name}` (with old signature)",
-                        severity=score,
-                        severity_label=label,
+                        severity=scored.score,
+                        severity_label=scored.label,
                         affected_callers=callers,
                         affected_owners=owners,
                         suggested_order=order,
+                        confidence=scored.confidence,
+                        explanation=scored.explanation,
+                        score_factors=scored.factors,
                     ))
 
             # Case 2: other MR changes S, this MR calls S (has a dependency on old S)
@@ -179,7 +182,7 @@ class CollisionEngine:
 
                     # Real affected callers live in the CHANGING MR (other_br).
                     callers = [c for c in other_br.downstream_callers if c.function_name != sym_name]
-                    score, label = score_collision(sym_change, callers, other_br.centrality_score)
+                    scored = score_collision_detailed(sym_change, callers, other_br.centrality_score)
                     order = suggest_merge_order(
                         other_br.mr_id, other_br.mr_iid, other_br.project_path,
                         this_br.mr_id, this_br.mr_iid, this_br.project_path,
@@ -201,11 +204,14 @@ class CollisionEngine:
                         intersecting_symbol=sym_name,
                         mr_a_changes=f"calls `{sym_name}` (with old signature)",
                         mr_b_depends_on=sym_change.signature_summary(),
-                        severity=score,
-                        severity_label=label,
+                        severity=scored.score,
+                        severity_label=scored.label,
                         affected_callers=callers,
                         affected_owners=owners,
                         suggested_order=order,
+                        confidence=scored.confidence,
+                        explanation=scored.explanation,
+                        score_factors=scored.factors,
                     ))
 
         # Deduplicate by (symbol, mr pair regardless of order)

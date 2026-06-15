@@ -248,6 +248,9 @@ async def get_collisions(mr_id: int) -> dict:
                 "other_action": c.mr_b_depends_on if mr_id == c.mr_a_id else c.mr_a_changes,
                 "severity": c.severity,
                 "severity_label": c.severity_label.value,
+                "confidence": c.confidence,
+                "explanation": c.explanation,
+                "score_factors": c.score_factors,
                 "suggested_order": c.suggested_order,
                 "affected_owners": c.affected_owners,
                 "affected_callers": [
