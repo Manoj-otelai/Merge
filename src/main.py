@@ -12,13 +12,15 @@ Routes:
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -41,6 +43,27 @@ from .symbol_extractor import extract_from_diff
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+# ── SSE broker — push events to all connected UI clients ────────────────────
+
+_sse_queues: list[asyncio.Queue] = []
+
+
+def _sse_broadcast(event_type: str, data: dict) -> None:
+    """Non-async helper: broadcast a JSON SSE event to all connected clients."""
+    msg = json.dumps({"type": event_type, **data})
+    dead: list[asyncio.Queue] = []
+    for q in _sse_queues:
+        try:
+            q.put_nowait(msg)
+        except asyncio.QueueFull:
+            dead.append(q)
+    for q in dead:
+        try:
+            _sse_queues.remove(q)
+        except ValueError:
+            pass
+
 
 # ── Globals (initialized in lifespan) ───────────────────────────────────────
 
@@ -225,6 +248,13 @@ async def handle_mr_webhook(request: Request) -> dict:
         except Exception as exc:
             logger.warning("Failed to record collision history: %s", exc)
 
+    # Push a real-time SSE update to all connected UI clients
+    try:
+        cmap = engine.get_collision_map()
+        _sse_broadcast("update", cmap.to_dict())
+    except Exception as exc:
+        logger.debug("SSE broadcast failed: %s", exc)
+
     # Step 4b: Compute the global merge plan (topological order across all MRs)
     merge_plan_text = ""
     try:
@@ -263,7 +293,7 @@ async def handle_mr_webhook(request: Request) -> dict:
         except Exception as exc:
             logger.warning("CI gate status update failed: %s", exc)
 
-    # Step 5: Post MR comments for each collision
+    # Step 5: Post MR comments for each collision (deduped — skip if already commented recently)
     def build_actions(perspective_id: int, symbol: str) -> str:
         links: list[str] = []
         if AUTOFIX_ENABLED and base_url:
@@ -277,11 +307,17 @@ async def handle_mr_webhook(request: Request) -> dict:
 
     comments_posted = 0
     for collision in collisions:
+        event_key = engine._event_key(collision)
+        if engine.already_commented(event_key):
+            logger.debug("Skipping duplicate comment for collision %s", event_key)
+            continue
+
         comment_body = collision.format_comment(
             mr_id, merge_plan_text, build_actions(mr_id, collision.intersecting_symbol)
         )
         try:
             await gitlab.post_mr_comment(project_id, mr_iid, comment_body)
+            engine.mark_commented(event_key)
             comments_posted += 1
 
             # Also comment on the other MR if we can
@@ -347,6 +383,8 @@ async def get_collisions(mr_id: int) -> dict:
         "changed_symbol_names": [s.name for s in br.changed_symbols],
         "collisions": [
             {
+                "event_key": engine._event_key(c),
+                "dismissed": engine.is_dismissed(engine._event_key(c)),
                 "other_mr_id": c.mr_b_id if mr_id == c.mr_a_id else c.mr_a_id,
                 "other_mr_iid": c.mr_b_iid if mr_id == c.mr_a_id else c.mr_a_iid,
                 "other_mr_title": c.mr_b_title if mr_id == c.mr_a_id else c.mr_a_title,
@@ -531,6 +569,78 @@ async def list_mrs() -> dict:
             for br in all_mrs
         ],
     }
+
+
+@app.get("/api/stream")
+async def sse_stream(request: Request):
+    """Server-Sent Events endpoint — push real-time collision updates to connected UIs."""
+    q: asyncio.Queue = asyncio.Queue(maxsize=32)
+    _sse_queues.append(q)
+
+    async def generator():
+        # Send current state immediately on connect
+        try:
+            cmap = engine.get_collision_map()
+            yield f"data: {json.dumps({'type': 'snapshot', **cmap.to_dict()})}\n\n"
+        except Exception:
+            pass
+
+        try:
+            while not await request.is_disconnected():
+                try:
+                    msg = await asyncio.wait_for(q.get(), timeout=25)
+                    yield f"data: {msg}\n\n"
+                except TimeoutError:
+                    # Heartbeat keeps the connection alive through proxies
+                    yield ": heartbeat\n\n"
+        finally:
+            try:
+                _sse_queues.remove(q)
+            except ValueError:
+                pass
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/timeline")
+async def get_timeline(limit: int = 60) -> dict:
+    """Collision history timeline — newest events first."""
+    return {"timeline": engine.get_timeline(limit=min(limit, 200))}
+
+
+@app.get("/api/export")
+async def export_report() -> dict:
+    """Full JSON snapshot of open MRs and collision history for audit / export."""
+    return engine.get_export()
+
+
+class DismissPayload(BaseModel):
+    event_key: str
+
+
+@app.post("/api/dismiss")
+async def dismiss_collision(payload: DismissPayload) -> dict:
+    """Mark a collision as reviewed/acknowledged — dims it in the UI."""
+    if not payload.event_key:
+        raise HTTPException(status_code=400, detail="event_key is required")
+    ok = engine.dismiss_collision(payload.event_key)
+    return {"status": "dismissed" if ok else "not_found", "event_key": payload.event_key}
+
+
+@app.post("/api/undismiss")
+async def undismiss_collision(payload: DismissPayload) -> dict:
+    """Reopen a previously dismissed collision."""
+    if not payload.event_key:
+        raise HTTPException(status_code=400, detail="event_key is required")
+    ok = engine.undismiss_collision(payload.event_key)
+    return {"status": "reopened" if ok else "not_found", "event_key": payload.event_key}
 
 
 @app.get("/api/metrics")

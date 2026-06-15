@@ -60,12 +60,17 @@ CREATE TABLE IF NOT EXISTS collision_events (
     files            TEXT NOT NULL DEFAULT '[]',  -- JSON
     first_seen       REAL NOT NULL DEFAULT 0,
     last_seen        REAL NOT NULL DEFAULT 0,
-    resolved_at      REAL                          -- NULL while open
+    resolved_at      REAL,                         -- NULL while open
+    commented_at     REAL,                         -- last time we posted an MR comment
+    dismissed_at     REAL                          -- NULL unless manually reviewed/dismissed
 );
 """
 
 # MR entries expire after 7 days of inactivity (stale open MR cleanup)
 _TTL_SECONDS = 7 * 24 * 3600
+
+# How long before we re-post a collision comment (hours)
+_COMMENT_COOLDOWN_HOURS = 24
 
 
 class CollisionEngine:
@@ -75,7 +80,21 @@ class CollisionEngine:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute(_DDL)
         self._conn.execute(_DDL_HISTORY)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after the initial schema without losing data."""
+        existing = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(collision_events)").fetchall()
+        }
+        for col, defn in [
+            ("commented_at", "REAL"),
+            ("dismissed_at", "REAL"),
+        ]:
+            if col not in existing:
+                self._conn.execute(f"ALTER TABLE collision_events ADD COLUMN {col} {defn}")
 
     # ── Registry management ──────────────────────────────────────────────────
 
@@ -390,6 +409,112 @@ class CollisionEngine:
         )
         self._conn.commit()
         return cur.rowcount
+
+    # ── Notification deduplication ────────────────────────────────────────────
+
+    def mark_commented(self, event_key: str) -> None:
+        """Record that we just posted an MR comment for this collision."""
+        self._conn.execute(
+            "UPDATE collision_events SET commented_at = ? WHERE event_key = ?",
+            (time.time(), event_key),
+        )
+        self._conn.commit()
+
+    def already_commented(self, event_key: str, hours: float = _COMMENT_COOLDOWN_HOURS) -> bool:
+        """Return True if we posted a comment for this collision within `hours`."""
+        row = self._conn.execute(
+            "SELECT commented_at FROM collision_events WHERE event_key = ?",
+            (event_key,),
+        ).fetchone()
+        if not row or row["commented_at"] is None:
+            return False
+        return (time.time() - row["commented_at"]) < hours * 3600
+
+    # ── Dismiss / acknowledge ─────────────────────────────────────────────────
+
+    def dismiss_collision(self, event_key: str) -> bool:
+        """Acknowledge a collision so it no longer blocks the merge gate."""
+        cur = self._conn.execute(
+            "UPDATE collision_events SET dismissed_at = ? WHERE event_key = ?",
+            (time.time(), event_key),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def undismiss_collision(self, event_key: str) -> bool:
+        """Reopen a dismissed collision."""
+        cur = self._conn.execute(
+            "UPDATE collision_events SET dismissed_at = NULL WHERE event_key = ?",
+            (event_key,),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def is_dismissed(self, event_key: str) -> bool:
+        row = self._conn.execute(
+            "SELECT dismissed_at FROM collision_events WHERE event_key = ?",
+            (event_key,),
+        ).fetchone()
+        return bool(row and row["dismissed_at"] is not None)
+
+    # ── Timeline ──────────────────────────────────────────────────────────────
+
+    def get_timeline(self, limit: int = 60) -> list[dict]:
+        """Return the most recent collision events sorted newest-first."""
+        rows = self._conn.execute(
+            """
+            SELECT * FROM collision_events
+            ORDER BY last_seen DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        result = []
+        for r in rows:
+            result.append({
+                "event_key": r["event_key"],
+                "symbol": r["symbol"],
+                "mr_a_iid": r["mr_a_iid"],
+                "mr_b_iid": r["mr_b_iid"],
+                "project_a": r["project_a"],
+                "project_b": r["project_b"],
+                "severity": r["severity"],
+                "severity_label": r["severity_label"],
+                "caller_count": r["caller_count"],
+                "owners": json.loads(r["owners"] or "[]"),
+                "first_seen": r["first_seen"],
+                "last_seen": r["last_seen"],
+                "resolved_at": r["resolved_at"],
+                "dismissed_at": r["dismissed_at"],
+                "commented_at": r["commented_at"],
+                "status": (
+                    "resolved" if r["resolved_at"]
+                    else "dismissed" if r["dismissed_at"]
+                    else "active"
+                ),
+            })
+        return result
+
+    def get_export(self) -> dict:
+        """Return a full JSON-serialisable snapshot for export / audit."""
+        return {
+            "exported_at": time.time(),
+            "open_mrs": [
+                {
+                    "mr_id": br.mr_id,
+                    "mr_iid": br.mr_iid,
+                    "mr_url": br.mr_url,
+                    "mr_title": br.mr_title,
+                    "project": br.project_path,
+                    "author": br.author,
+                    "source_branch": br.source_branch,
+                    "changed_symbols": [s.name for s in br.changed_symbols],
+                    "caller_count": len(br.downstream_callers),
+                }
+                for br in self.all_open_mrs()
+            ],
+            "timeline": self.get_timeline(limit=500),
+        }
 
     def get_analytics(self, cost_model=None) -> dict:
         """Aggregate collision history into hotspots, owner load, and cost saved."""

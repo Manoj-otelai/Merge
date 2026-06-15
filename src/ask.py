@@ -29,12 +29,14 @@ def answer(question: str, engine, cost_model=None) -> dict:
     iid = _find_iid(question)
 
     # ── safe-to-merge ──
-    if any(w in q for w in ("safe to merge", "safe today", "which", "can i merge", "ready to merge")) \
+    if any(w in q for w in ("safe to merge", "safe today", "can i merge", "ready to merge")) \
             and "merge" in q:
+        return _safe_to_merge(engine)
+    if "which" in q and "merge" in q and not iid:
         return _safe_to_merge(engine)
 
     # ── what does !X break / collide with ──
-    if iid is not None and any(w in q for w in ("break", "collide", "conflict", "affect", "impact", "what does")):
+    if iid is not None and any(w in q for w in ("break", "collide", "conflict", "affect", "impact", "what does", "blocks")):
         return _what_breaks(engine, iid)
 
     # ── who to coordinate with ──
@@ -42,15 +44,27 @@ def answer(question: str, engine, cost_model=None) -> dict:
         return _who_to_coordinate(engine, iid)
 
     # ── riskiest ──
-    if any(w in q for w in ("riskiest", "most dangerous", "highest severity", "worst", "top collision")):
+    if any(w in q for w in ("riskiest", "most dangerous", "highest severity", "worst", "top collision", "biggest risk")):
         return _riskiest(engine)
 
+    # ── hotspot files / services ──
+    if any(w in q for w in ("hotspot", "hot spot", "most affected file", "which file", "which service", "most impacted")):
+        return _hotspots(engine, cost_model)
+
+    # ── owner load / who's involved ──
+    if not iid and any(w in q for w in ("who is", "who are", "owner load", "most involved", "busiest", "overloaded")):
+        return _owner_load(engine, cost_model)
+
+    # ── dismissed ──
+    if any(w in q for w in ("dismissed", "acknowledged", "reviewed", "snoozed")):
+        return _dismissed(engine)
+
     # ── savings ──
-    if any(w in q for w in ("saved", "savings", "cost", "money", "hours", "roi")):
+    if any(w in q for w in ("saved", "savings", "cost", "money", "hours", "roi", "impact")):
         return _savings(engine, cost_model)
 
     # ── merge order / plan ──
-    if any(w in q for w in ("merge order", "sequence", "plan", "order to merge", "what order")):
+    if any(w in q for w in ("merge order", "sequence", "plan", "order to merge", "what order", "when to merge")):
         return _merge_plan(engine)
 
     # ── fallback: per-MR if an iid was given, else overview ──
@@ -172,6 +186,50 @@ def _overview(engine, cost_model) -> dict:
                        f"which MRs are safe to merge, who to coordinate with, or how much we've saved."),
             "data": {"open_mrs": cmap.open_mrs, "collisions": cmap.total_collisions,
                      "cost_saved": a["cost_saved"]}}
+
+
+def _hotspots(engine, cost_model) -> dict:
+    a = engine.get_analytics(cost_model)
+    files = a.get("hotspot_files") or []
+    projects = a.get("hotspot_projects") or []
+    parts = []
+    if files:
+        top_file = files[0]["name"].split("/")[-1]
+        parts.append(f"File: `{top_file}` ({files[0]['count']} collision(s))")
+    if projects:
+        parts.append(f"Service: `{projects[0]['name'].split('/')[-1]}` ({projects[0]['count']} collision(s))")
+    if not parts:
+        return {"intent": "hotspots", "answer": "No collision history yet — hotspots will appear after the first collision is detected.", "data": {}}
+    return {"intent": "hotspots",
+            "answer": f"🔥 Top hotspot(s): {'; '.join(parts)}. "
+                      f"These indicate fragile shared contracts that many MRs touch.",
+            "data": {"hotspot_files": files, "hotspot_projects": projects}}
+
+
+def _owner_load(engine, cost_model) -> dict:
+    a = engine.get_analytics(cost_model)
+    owners = a.get("owner_load") or []
+    if not owners:
+        return {"intent": "owner_load", "answer": "No collision history yet — owner load will appear after collisions are detected.", "data": {}}
+    top = owners[:3]
+    parts = [f"@{o['name']} ({o['count']} collision(s))" for o in top]
+    return {"intent": "owner_load",
+            "answer": f"👥 Most involved owners: {', '.join(parts)}. They own the callers at risk in the most collisions.",
+            "data": {"owner_load": owners}}
+
+
+def _dismissed(engine) -> dict:
+    tl = engine.get_timeline()
+    dismissed = [ev for ev in tl if ev["status"] == "dismissed"]
+    if not dismissed:
+        return {"intent": "dismissed",
+                "answer": "No collisions have been dismissed/acknowledged yet.",
+                "data": {"dismissed": []}}
+    parts = [f"`{ev['symbol']}` (!{ev['mr_a_iid']} ↔ !{ev['mr_b_iid']})" for ev in dismissed[:5]]
+    return {"intent": "dismissed",
+            "answer": f"👁️ {len(dismissed)} acknowledged collision(s): {', '.join(parts)}. "
+                      f"These are still present but won't block the merge gate while dismissed.",
+            "data": {"dismissed": dismissed}}
 
 
 def _collision_brief(c, perspective_id: int) -> dict:

@@ -947,3 +947,124 @@ kbd {
 @media (max-width: 1320px) {
   .stats-row { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* ── Timeline view ──────────────────────────────────────────────────────── */
+.tl-summary {
+  display: flex; gap: 16px; flex-wrap: wrap;
+  padding: 0 0 14px; margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px; color: var(--text-soft);
+}
+.tl-stat { display: flex; align-items: center; gap: 6px; }
+.tl-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.tl-dot.active    { background: var(--critical); }
+.tl-dot.dismissed { background: var(--medium); }
+.tl-dot.resolved  { background: var(--low); }
+
+.tl-list { display: flex; flex-direction: column; gap: 0; }
+.tl-item {
+  display: flex; gap: 12px; padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.12s;
+}
+.tl-item:last-child { border-bottom: none; }
+.tl-item.status-dismissed { opacity: 0.65; }
+.tl-item.status-resolved  { opacity: 0.55; }
+.tl-marker { padding-top: 4px; flex-shrink: 0; }
+.tl-body { flex: 1; min-width: 0; }
+.tl-top {
+  display: flex; align-items: center; gap: 6px;
+  flex-wrap: wrap; margin-bottom: 3px;
+}
+.tl-symbol { font-weight: 600; font-size: 13px; color: var(--text); }
+.tl-dismissed-tag {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.04em; padding: 2px 7px; border-radius: var(--radius-pill);
+  background: var(--medium-bg); color: var(--medium); border: 1px solid #fdedb0;
+}
+.tl-resolved-tag {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.04em; padding: 2px 7px; border-radius: var(--radius-pill);
+  background: var(--low-bg); color: var(--low); border: 1px solid #a6f4c5;
+}
+.tl-mrs {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 12.5px; margin-bottom: 2px; flex-wrap: wrap;
+}
+.tl-sep  { font-size: 11.5px; color: var(--text-muted); }
+.tl-arrow { color: var(--text-muted); }
+.tl-meta { font-size: 11.5px; color: var(--text-soft); margin-bottom: 2px; }
+.tl-times { font-size: 11px; color: var(--text-muted); }
+
+/* ── Dismiss / acknowledge button ────────────────────────────────────────── */
+.dismiss-btn {
+  width: 100%; margin-top: 8px;
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  color: var(--text-soft); background: var(--surface-2);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 8px 12px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.dismiss-btn:hover { background: var(--low-bg); border-color: #a6f4c5; color: var(--low); }
+.dismiss-btn.undismiss:hover { background: var(--medium-bg); border-color: #fdedb0; color: var(--medium); }
+.dismiss-btn:active { transform: translateY(0.5px); }
+.dismiss-note {
+  font-size: 11.5px; color: var(--text-muted); margin-top: 6px;
+  padding: 6px 10px; background: var(--medium-bg); border-radius: var(--radius-sm);
+  border: 1px solid #fdedb0;
+}
+
+/* ── Keyboard shortcuts modal ────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(16, 24, 40, 0.35);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.modal-overlay.hidden { display: none; }
+.modal-box {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-lg);
+  width: 100%; max-width: 420px; overflow: hidden;
+}
+.modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; border-bottom: 1px solid var(--border);
+}
+.modal-title { font-size: 14px; font-weight: 700; color: var(--text); }
+.modal-close {
+  font-size: 14px; font-weight: 600; color: var(--text-muted);
+  background: none; border: none; cursor: pointer; padding: 4px 8px;
+  border-radius: var(--radius-sm); transition: background 0.15s;
+}
+.modal-close:hover { background: var(--surface-2); color: var(--text); }
+
+.shortcut-list { padding: 8px 0; }
+.shortcut-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 18px; font-size: 13px; color: var(--text-soft);
+}
+.shortcut-row kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 26px; height: 22px; padding: 0 7px;
+  font-size: 11px;
+}
+.shortcut-row span { flex: 1; }
+
+/* ── Pulsing critical / high graph edges ────────────────────────────────── */
+@keyframes edge-pulse {
+  0%, 100% { stroke-opacity: 1; }
+  50%       { stroke-opacity: 0.45; }
+}
+.link.critical { animation: edge-pulse 1.8s ease-in-out infinite; }
+.link.high     { animation: edge-pulse 2.6s ease-in-out infinite; }
+
+/* ── Node double-click hint on hover ─────────────────────────────────────── */
+g.node { cursor: pointer; }
+g.node:active circle { transform: scale(0.96); transform-origin: center; }
+
+/* ── Stats: teal icon ────────────────────────────────────────────────────── */
+.stat-icon.teal { background: #e6fbf6; }

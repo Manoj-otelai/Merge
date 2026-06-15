@@ -73,6 +73,18 @@
       };
     }
 
+    // Export button
+    const exportBtn = document.getElementById("export-btn");
+    if (exportBtn) exportBtn.onclick = () => downloadExport();
+
+    // Shortcuts modal
+    const modal = document.getElementById("shortcuts-modal");
+    const modalClose = document.getElementById("modal-close");
+    if (modal && modalClose) {
+      modalClose.onclick = () => modal.classList.add("hidden");
+      modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
+    }
+
     // Keyboard shortcuts
     document.addEventListener("keydown", handleKeyDown);
 
@@ -84,14 +96,91 @@
 
     fetchAndRender();
     setInterval(fetchAndRender, POLL_INTERVAL);
+    connectSSE();
+  }
+
+  function connectSSE() {
+    if (typeof EventSource === "undefined") return;
+    const es = new EventSource("/api/stream");
+    let reconnectMs = 2000;
+
+    es.onopen = () => {
+      const dot = document.querySelector(".live-dot");
+      if (dot) dot.title = "Live (SSE connected)";
+    };
+
+    es.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === "update" || msg.type === "snapshot") {
+          currentData = msg;
+          updateStats(msg);
+          updateSavedStat(currentAnalytics);
+          if (HAS_D3) render(msg);
+          if (!HAS_D3 || currentView === "list") renderList(msg);
+          document.getElementById("last-updated").textContent = timeNow();
+          reconnectMs = 2000;
+        }
+      } catch { /* ignore parse errors */ }
+    };
+
+    es.onerror = () => {
+      const dot = document.querySelector(".live-dot");
+      if (dot) dot.style.background = "var(--medium)";
+      // On disconnect, fall back to polling; try to reconnect SSE after a delay
+      setTimeout(() => {
+        if (es.readyState === EventSource.CLOSED) {
+          const d = document.querySelector(".live-dot");
+          if (d) d.style.background = "";
+          connectSSE();
+        }
+      }, reconnectMs);
+      reconnectMs = Math.min(reconnectMs * 2, 30000);
+    };
   }
 
   function handleKeyDown(e) {
-    if (e.key === "Escape" && selected) {
-      clearSelection();
-      e.preventDefault();
-      return;
+    const tag = (e.target?.tagName || "").toLowerCase();
+    const isInput = tag === "input" || tag === "textarea";
+    const modal = document.getElementById("shortcuts-modal");
+    const modalVisible = modal && !modal.classList.contains("hidden");
+
+    if (e.key === "Escape") {
+      if (modalVisible) { modal.classList.add("hidden"); e.preventDefault(); return; }
+      if (selected) { clearSelection(); e.preventDefault(); return; }
     }
+
+    // Don't capture shortcuts when typing in an input
+    if (isInput) return;
+
+    switch (e.key) {
+      case "?":
+        if (modal) { modal.classList.toggle("hidden"); e.preventDefault(); }
+        return;
+      case "g": case "G":
+        if (HAS_D3) { switchView("graph"); e.preventDefault(); } return;
+      case "l": case "L":
+        switchView("list"); e.preventDefault(); return;
+      case "p": case "P":
+        switchView("plan"); e.preventDefault(); return;
+      case "t": case "T":
+        switchView("timeline"); e.preventDefault(); return;
+      case "i": case "I":
+        switchView("insights"); e.preventDefault(); return;
+      case "r": case "R":
+        fetchAndRender(); e.preventDefault(); return;
+      case "f": case "F":
+        if (HAS_D3 && currentView === "graph") { fitToView(); e.preventDefault(); } return;
+      case "+": case "=":
+        if (HAS_D3 && currentView === "graph") {
+          svg.transition().duration(220).call(zoom.scaleBy, 1.3); e.preventDefault();
+        } return;
+      case "-":
+        if (HAS_D3 && currentView === "graph") {
+          svg.transition().duration(220).call(zoom.scaleBy, 1 / 1.3); e.preventDefault();
+        } return;
+    }
+
     if (currentView === "list") {
       const rows = Array.from(document.querySelectorAll(".collision-row"));
       if (!rows.length) return;
@@ -106,6 +195,29 @@
       } else if (e.key === "Enter" && listSelectedIdx >= 0 && rows[listSelectedIdx]) {
         rows[listSelectedIdx].click();
       }
+    }
+  }
+
+  async function downloadExport() {
+    const btn = document.getElementById("export-btn");
+    if (btn) { btn.textContent = "⏳ Exporting…"; btn.disabled = true; }
+    try {
+      const resp = await fetch("/api/export");
+      if (!resp.ok) throw new Error("API " + resp.status);
+      const data = await resp.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `mergeguard-export-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Export failed:", err);
+    } finally {
+      if (btn) { btn.textContent = "⬇ Export"; btn.disabled = false; }
     }
   }
 
@@ -169,24 +281,29 @@
   }
 
   // ── Data fetch ────────────────────────────────────────────────────────────
+  let currentTimeline = null;
+
   async function fetchAndRender() {
     try {
-      const [mapResp, anResp, planResp] = await Promise.all([
+      const [mapResp, anResp, planResp, tlResp] = await Promise.all([
         fetch("/api/collision-map"),
         fetch("/api/analytics").catch(() => null),
         fetch("/api/merge-plan").catch(() => null),
+        fetch("/api/timeline").catch(() => null),
       ]);
       if (!mapResp.ok) throw new Error("API " + mapResp.status);
       const data = await mapResp.json();
       currentData = data;
       currentAnalytics = anResp && anResp.ok ? await anResp.json() : null;
       currentPlan = planResp && planResp.ok ? await planResp.json() : null;
+      currentTimeline = tlResp && tlResp.ok ? (await tlResp.json()).timeline || [] : null;
 
       updateStats(data);
       updateSavedStat(currentAnalytics);
       if (HAS_D3) render(data);
       if (!HAS_D3 || currentView === "list") renderList(data);
       if (currentView === "plan") renderPlan(currentPlan);
+      if (currentView === "timeline") renderTimeline(currentTimeline);
       if (currentView === "insights") renderInsights(currentAnalytics);
     } catch (err) {
       console.error("MergeGuard fetch error:", err);
@@ -348,6 +465,11 @@
           g.append("circle");
           g.append("text").attr("class", "node-iid").attr("dy", "0.32em");
           g.append("text").attr("class", "node-label");
+          // Double-click opens the MR in a new tab
+          g.on("dblclick", (e, nd) => {
+            e.stopPropagation();
+            if (nd.url) window.open(nd.url, "_blank", "noopener,noreferrer");
+          });
           return g;
         },
         (update) => update.attr("class", (d) => `node ${isColliding(d.id) ? "warn" : "safe"}`),
@@ -554,6 +676,7 @@
   }
 
   function renderEdgeDetail(info, c, edge) {
+    _lastEdge = edge;  // store for dismiss re-render
     if (!c) { renderError("Collision detail unavailable."); return; }
     const callers = c.affected_callers || [];
     const owners  = c.affected_owners  || [];
@@ -650,11 +773,58 @@
         <div class="autofix-result" id="autofix-result"></div>
       </div>`;
 
+    // Dismiss / acknowledge
+    const dismissed = c.dismissed || false;
+    const evKey = c.event_key || "";
+    html += `
+      <div class="section">
+        <div class="section-title">Acknowledgement</div>
+        <button class="dismiss-btn ${dismissed ? "undismiss" : ""}" id="dismiss-btn"
+                data-key="${esc(evKey)}" data-dismissed="${dismissed}">
+          ${dismissed ? "↩ Reopen collision" : "✓ Mark as reviewed"}
+        </button>
+        ${dismissed ? `<div class="dismiss-note">This collision has been acknowledged — it won't block the merge gate while dismissed.</div>` : ""}
+      </div>`;
+
     showContent(html);
 
     const btn = document.getElementById("autofix-btn");
     if (btn) btn.onclick = () => previewAutofix(btn.dataset.mr, btn.dataset.symbol, btn);
+
+    const dismissBtn = document.getElementById("dismiss-btn");
+    if (dismissBtn) {
+      dismissBtn.onclick = async () => {
+        const key = dismissBtn.dataset.key;
+        const wasDismissed = dismissBtn.dataset.dismissed === "true";
+        const endpoint = wasDismissed ? "/api/undismiss" : "/api/dismiss";
+        try {
+          const resp = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ event_key: key }),
+          });
+          if (!resp.ok) throw new Error("API " + resp.status);
+          // Re-fetch and re-render with updated state
+          await fetchAndRender();
+          const sId = typeof edge.source === "object" ? edge.source.id : edge.source;
+          const tId = typeof edge.target === "object" ? edge.target.id : edge.target;
+          const updatedResp = await fetch(`/api/collisions/${sId}`);
+          if (updatedResp.ok) {
+            const updatedInfo = await updatedResp.json();
+            const updatedCollision = (updatedInfo.collisions || []).find(
+              (col) => col.event_key === key
+            ) || c;
+            renderEdgeDetail(updatedInfo, updatedCollision, _lastEdge || edge);
+          }
+        } catch (err) {
+          console.error("Dismiss failed:", err);
+        }
+      };
+    }
   }
+
+  // Store `edge` reference in renderEdgeDetail closure
+  let _lastEdge = null;
 
   async function previewAutofix(mrId, symbol, btn) {
     const out = document.getElementById("autofix-result");
@@ -698,6 +868,65 @@
     }
   }
 
+  // ── Timeline view ─────────────────────────────────────────────────────────
+  function renderTimeline(events) {
+    const el = document.getElementById("timeline-view");
+    if (!el) return;
+
+    if (!events || !events.length) {
+      el.innerHTML = emptyBlock("🕐", "No history yet",
+        "Collision events will appear here as they are detected and resolved.");
+      return;
+    }
+
+    const statuses = { active: 0, dismissed: 0, resolved: 0 };
+    events.forEach((e) => { if (statuses.hasOwnProperty(e.status)) statuses[e.status]++; });
+
+    let html = `
+      <div class="tl-summary">
+        <span class="tl-stat"><span class="tl-dot active"></span>${statuses.active} active</span>
+        <span class="tl-stat"><span class="tl-dot dismissed"></span>${statuses.dismissed} acknowledged</span>
+        <span class="tl-stat"><span class="tl-dot resolved"></span>${statuses.resolved} resolved</span>
+      </div>
+      <div class="tl-list">`;
+
+    events.forEach((ev) => {
+      const when = relTime(ev.last_seen);
+      const firstWhen = relTime(ev.first_seen);
+      const ownerStr = (ev.owners || []).slice(0, 3).map((o) => `@${o}`).join(", ");
+      html += `
+        <div class="tl-item status-${ev.status}">
+          <div class="tl-marker"><span class="tl-dot ${ev.status}"></span></div>
+          <div class="tl-body">
+            <div class="tl-top">
+              <span class="tl-symbol">⚡ ${esc(ev.symbol)}</span>
+              ${badge(ev.severity_label)}
+              ${ev.status === "dismissed" ? `<span class="tl-dismissed-tag">acknowledged</span>` : ""}
+              ${ev.status === "resolved" ? `<span class="tl-resolved-tag">resolved</span>` : ""}
+            </div>
+            <div class="tl-mrs">
+              <span class="mr-ref">!${ev.mr_a_iid}</span>
+              <span class="tl-sep">${esc(ev.project_a?.split("/").pop() || "")}</span>
+              <span class="tl-arrow">↔</span>
+              <span class="mr-ref">!${ev.mr_b_iid}</span>
+              <span class="tl-sep">${esc(ev.project_b?.split("/").pop() || "")}</span>
+            </div>
+            <div class="tl-meta">
+              ${ev.caller_count ? `${ev.caller_count} caller${ev.caller_count !== 1 ? "s" : ""} at risk` : ""}
+              ${ownerStr ? ` · ${esc(ownerStr)}` : ""}
+            </div>
+            <div class="tl-times">
+              First seen ${esc(firstWhen)} · last seen ${esc(when)}
+              ${ev.resolved_at ? ` · resolved ${esc(relTime(ev.resolved_at))}` : ""}
+            </div>
+          </div>
+        </div>`;
+    });
+
+    html += `</div>`;
+    el.innerHTML = html;
+  }
+
   // ── List view ──────────────────────────────────────────────────────────────
   function switchView(view) {
     if (view === "graph" && !HAS_D3) return;
@@ -709,6 +938,7 @@
       graph: document.getElementById("graph-view"),
       list: document.getElementById("list-view"),
       plan: document.getElementById("plan-view"),
+      timeline: document.getElementById("timeline-view"),
       insights: document.getElementById("insights-view"),
     };
     const toolbar = document.getElementById("list-toolbar");
@@ -725,6 +955,8 @@
       renderList(currentData);
     } else if (view === "plan") {
       renderPlan(currentPlan);
+    } else if (view === "timeline") {
+      renderTimeline(currentTimeline);
     } else if (view === "insights") {
       renderInsights(currentAnalytics);
     }
@@ -868,6 +1100,8 @@
           <button class="ask-chip" data-q="Which of my open MRs are safe to merge today?">Safe to merge?</button>
           <button class="ask-chip" data-q="What's the riskiest collision right now?">Riskiest collision</button>
           <button class="ask-chip" data-q="What's the merge order?">Merge order</button>
+          <button class="ask-chip" data-q="Which files are the hotspots?">Hotspot files</button>
+          <button class="ask-chip" data-q="Who is most affected by current collisions?">Owner load</button>
           <button class="ask-chip" data-q="How much has MergeGuard saved us?">Savings</button>
         </div>
         <div class="ask-answer ${lastAskAnswer ? "" : "hidden"}" id="ask-answer">${lastAskAnswer}</div>
@@ -1007,6 +1241,14 @@
   function setText(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
   function timeNow() { return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
   function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+  function relTime(epoch) {
+    if (!epoch) return "unknown";
+    const diff = (Date.now() / 1000) - epoch;
+    if (diff < 60) return "just now";
+    if (diff < 3600) return `${Math.round(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.round(diff / 3600)}h ago`;
+    return `${Math.round(diff / 86400)}d ago`;
+  }
 
   document.addEventListener("DOMContentLoaded", init);
 })();

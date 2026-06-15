@@ -200,3 +200,96 @@ class TestCollisionDetection:
         colliding_mrs = {c.mr_b_id for c in collisions}
         assert 2 in colliding_mrs
         assert 3 in colliding_mrs
+
+
+class TestNotificationDedup:
+    def _setup_collision(self, engine):
+        mr_a = make_blast_radius(1, 1, "group/p", [make_symbol("fn")], [])
+        mr_b = make_blast_radius(2, 2, "group/q", [], [make_caller("fn", "group/p")])
+        engine.register_mr(mr_a)
+        engine.register_mr(mr_b)
+        collisions = engine.find_collisions(1)
+        engine.record_collisions(collisions)
+        return collisions[0]
+
+    def test_not_commented_initially(self, engine):
+        c = self._setup_collision(engine)
+        key = engine._event_key(c)
+        assert not engine.already_commented(key)
+
+    def test_mark_commented_sets_flag(self, engine):
+        c = self._setup_collision(engine)
+        key = engine._event_key(c)
+        engine.mark_commented(key)
+        assert engine.already_commented(key, hours=24)
+
+    def test_cooldown_expired_returns_false(self, engine):
+        c = self._setup_collision(engine)
+        key = engine._event_key(c)
+        engine.mark_commented(key)
+        # Check with 0 hours (always expired)
+        assert not engine.already_commented(key, hours=0)
+
+
+class TestDismiss:
+    def _setup_collision(self, engine):
+        mr_a = make_blast_radius(10, 10, "group/x", [make_symbol("pay")], [])
+        mr_b = make_blast_radius(11, 11, "group/y", [], [make_caller("pay", "group/x")])
+        engine.register_mr(mr_a)
+        engine.register_mr(mr_b)
+        collisions = engine.find_collisions(10)
+        engine.record_collisions(collisions)
+        return collisions[0]
+
+    def test_not_dismissed_initially(self, engine):
+        c = self._setup_collision(engine)
+        assert not engine.is_dismissed(engine._event_key(c))
+
+    def test_dismiss_sets_flag(self, engine):
+        c = self._setup_collision(engine)
+        key = engine._event_key(c)
+        assert engine.dismiss_collision(key)
+        assert engine.is_dismissed(key)
+
+    def test_undismiss_clears_flag(self, engine):
+        c = self._setup_collision(engine)
+        key = engine._event_key(c)
+        engine.dismiss_collision(key)
+        engine.undismiss_collision(key)
+        assert not engine.is_dismissed(key)
+
+
+class TestTimeline:
+    def test_timeline_empty(self, engine):
+        assert engine.get_timeline() == []
+
+    def test_timeline_after_collision(self, engine):
+        mr_a = make_blast_radius(20, 20, "group/a", [make_symbol("api")], [])
+        mr_b = make_blast_radius(21, 21, "group/b", [], [make_caller("api", "group/a")])
+        engine.register_mr(mr_a)
+        engine.register_mr(mr_b)
+        collisions = engine.find_collisions(20)
+        engine.record_collisions(collisions)
+
+        tl = engine.get_timeline()
+        assert len(tl) == 1
+        assert tl[0]["symbol"] == "api"
+        assert tl[0]["status"] == "active"
+
+    def test_timeline_resolved_status(self, engine):
+        mr_a = make_blast_radius(30, 30, "group/a", [make_symbol("svc")], [])
+        mr_b = make_blast_radius(31, 31, "group/b", [], [make_caller("svc", "group/a")])
+        engine.register_mr(mr_a)
+        engine.register_mr(mr_b)
+        collisions = engine.find_collisions(30)
+        engine.record_collisions(collisions)
+        engine.mark_resolved_for_mr(30)
+
+        tl = engine.get_timeline()
+        assert tl[0]["status"] == "resolved"
+
+    def test_export_structure(self, engine):
+        exp = engine.get_export()
+        assert "exported_at" in exp
+        assert "open_mrs" in exp
+        assert "timeline" in exp

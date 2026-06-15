@@ -83,6 +83,7 @@
             <button data-view="graph" class="active">Graph</button>
             <button data-view="list">List</button>
             <button data-view="plan">Plan</button>
+            <button data-view="timeline">Timeline</button>
             <button data-view="insights">Insights</button>
           </div>
         </div>
@@ -135,6 +136,9 @@
         <!-- Plan view -->
         <div class="scroll-body hidden" id="plan-view"></div>
 
+        <!-- Timeline view -->
+        <div class="scroll-body hidden" id="timeline-view"></div>
+
         <!-- Insights view -->
         <div class="scroll-body hidden" id="insights-view"></div>
 
@@ -153,13 +157,16 @@
       <aside class="panel detail-panel">
         <div class="panel-header">
           <h2>Details</h2>
-          <span class="hint">Click a node or edge</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <button class="btn" id="export-btn" title="Export collision report">⬇ Export</button>
+            <span class="hint">Click a node or edge</span>
+          </div>
         </div>
         <div class="detail-placeholder" id="detail-placeholder">
           <div class="ph-icon">🔍</div>
           <p>Select a merge request or a collision to inspect the affected symbols, callers, and owners.</p>
           <div class="ph-hint">
-            <kbd>Esc</kbd> deselect&ensp;·&ensp;<kbd>↑↓</kbd> navigate list&ensp;·&ensp;<kbd>Enter</kbd> open
+            <kbd>Esc</kbd> deselect&ensp;·&ensp;<kbd>↑↓</kbd> navigate list&ensp;·&ensp;<kbd>Enter</kbd> open&ensp;·&ensp;<kbd>?</kbd> shortcuts
           </div>
         </div>
         <div id="detail-content" class="hidden"></div>
@@ -173,6 +180,31 @@
   </footer>
 
   <div class="tooltip" id="tooltip"></div>
+
+  <!-- Keyboard shortcuts modal -->
+  <div class="modal-overlay hidden" id="shortcuts-modal" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span class="modal-title">Keyboard Shortcuts</span>
+        <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="shortcut-list">
+        <div class="shortcut-row"><kbd>?</kbd><span>Show / hide this panel</span></div>
+        <div class="shortcut-row"><kbd>Esc</kbd><span>Deselect / close</span></div>
+        <div class="shortcut-row"><kbd>↑</kbd><kbd>↓</kbd><span>Navigate list rows</span></div>
+        <div class="shortcut-row"><kbd>Enter</kbd><span>Open selected row</span></div>
+        <div class="shortcut-row"><kbd>G</kbd><span>Switch to Graph view</span></div>
+        <div class="shortcut-row"><kbd>L</kbd><span>Switch to List view</span></div>
+        <div class="shortcut-row"><kbd>P</kbd><span>Switch to Plan view</span></div>
+        <div class="shortcut-row"><kbd>T</kbd><span>Switch to Timeline view</span></div>
+        <div class="shortcut-row"><kbd>I</kbd><span>Switch to Insights view</span></div>
+        <div class="shortcut-row"><kbd>R</kbd><span>Refresh data</span></div>
+        <div class="shortcut-row"><kbd>F</kbd><span>Fit graph to view</span></div>
+        <div class="shortcut-row"><kbd>+</kbd><span>Zoom in</span></div>
+        <div class="shortcut-row"><kbd>−</kbd><span>Zoom out</span></div>
+      </div>
+    </div>
+  </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"
           integrity="sha512-vc58zeotzSzPgBAMFJuTZ85tDwwd3O7PHKnaa80W4UaxcK5Jme5bhg3/GY3rFM+oBFECuHRNX8sFhZE5BPAQQ=="
