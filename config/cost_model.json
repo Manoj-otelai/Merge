@@ -1,0 +1,21 @@
+{
+  "_comment": "MergeGuard cost model — all impact assumptions live here so they are transparent and tunable. Dollar figures are illustrative defaults; tune to your org. Override the file path with MERGEGUARD_COST_MODEL.",
+  "currency": "USD",
+  "engineer_hourly_cost": 120,
+  "downtime_cost_per_minute": 5000,
+  "rework_hours_base": 4.0,
+  "rework_hours_per_caller": 0.5,
+  "coordination_hours_per_extra_team": 2.0,
+  "expected_downtime_minutes_by_severity": {
+    "critical": 90,
+    "high": 45,
+    "medium": 15,
+    "low": 2
+  },
+  "probability_reaches_prod_by_severity": {
+    "critical": 0.70,
+    "high": 0.50,
+    "medium": 0.25,
+    "low": 0.05
+  }
+}

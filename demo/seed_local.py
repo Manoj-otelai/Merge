@@ -128,6 +128,11 @@ def seed(db_path: str) -> None:
     for br in (payments, notifications, billing):
         engine.register_mr(br)
 
+    # Persist detected collisions to history so the analytics / cost dashboard
+    # has deterministic data in the offline demo.
+    for br in (payments, notifications, billing):
+        engine.record_collisions(engine.find_collisions(br.mr_id))
+
     cmap = engine.get_collision_map()
     print(f"✓ Seeded {db_path}")
     print(f"  Open MRs:   {cmap.open_mrs}")

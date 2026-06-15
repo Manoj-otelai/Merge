@@ -44,6 +44,29 @@ CREATE TABLE IF NOT EXISTS blast_radii (
 );
 """
 
+# Persistent history of every collision MergeGuard has surfaced (Phase 2.2).
+_DDL_HISTORY = """
+CREATE TABLE IF NOT EXISTS collision_events (
+    event_key        TEXT PRIMARY KEY,   -- stable: symbol|min_id|max_id
+    symbol           TEXT NOT NULL,
+    mr_a_id          INTEGER NOT NULL,
+    mr_b_id          INTEGER NOT NULL,
+    mr_a_iid         INTEGER NOT NULL DEFAULT 0,
+    mr_b_iid         INTEGER NOT NULL DEFAULT 0,
+    project_a        TEXT NOT NULL DEFAULT '',
+    project_b        TEXT NOT NULL DEFAULT '',
+    severity         REAL NOT NULL DEFAULT 0,
+    severity_label   TEXT NOT NULL DEFAULT 'low',
+    caller_count     INTEGER NOT NULL DEFAULT 0,
+    distinct_projects INTEGER NOT NULL DEFAULT 1,
+    owners           TEXT NOT NULL DEFAULT '[]',  -- JSON
+    files            TEXT NOT NULL DEFAULT '[]',  -- JSON
+    first_seen       REAL NOT NULL DEFAULT 0,
+    last_seen        REAL NOT NULL DEFAULT 0,
+    resolved_at      REAL                          -- NULL while open
+);
+"""
+
 # MR entries expire after 7 days of inactivity (stale open MR cleanup)
 _TTL_SECONDS = 7 * 24 * 3600
 
@@ -54,6 +77,7 @@ class CollisionEngine:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute(_DDL)
+        self._conn.execute(_DDL_HISTORY)
         self._conn.commit()
 
     # ── Registry management ──────────────────────────────────────────────────
@@ -309,6 +333,134 @@ class CollisionEngine:
                 edges.append(MergeEdge(caller, changer, sym, c.severity_label.value))
 
         return compute_merge_plan(nodes, edges)
+
+    # ── History & analytics (Phase 2.2) ──────────────────────────────────────
+
+    @staticmethod
+    def _event_key(c: Collision) -> str:
+        lo, hi = sorted((c.mr_a_id, c.mr_b_id))
+        return f"{c.intersecting_symbol}|{lo}|{hi}"
+
+    def record_collisions(self, collisions: list[Collision]) -> int:
+        """Persist detected collisions into history (idempotent per event_key).
+
+        Re-detections bump last_seen and refresh severity; first_seen is kept.
+        Reopens (resolved → seen again) clear resolved_at.
+        """
+        now = time.time()
+        recorded = 0
+        for c in collisions:
+            key = self._event_key(c)
+            files = sorted({ca.file_path for ca in c.affected_callers if ca.file_path})
+            self._conn.execute(
+                """
+                INSERT INTO collision_events (
+                    event_key, symbol, mr_a_id, mr_b_id, mr_a_iid, mr_b_iid,
+                    project_a, project_b, severity, severity_label, caller_count,
+                    distinct_projects, owners, files, first_seen, last_seen, resolved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                ON CONFLICT(event_key) DO UPDATE SET
+                    severity=excluded.severity,
+                    severity_label=excluded.severity_label,
+                    caller_count=excluded.caller_count,
+                    distinct_projects=excluded.distinct_projects,
+                    owners=excluded.owners,
+                    files=excluded.files,
+                    last_seen=excluded.last_seen,
+                    resolved_at=NULL
+                """,
+                (
+                    key, c.intersecting_symbol, c.mr_a_id, c.mr_b_id, c.mr_a_iid, c.mr_b_iid,
+                    c.mr_a_project, c.mr_b_project, c.severity, c.severity_label.value,
+                    len(c.affected_callers),
+                    c.score_factors.get("distinct_projects", len({ca.project_path for ca in c.affected_callers}) or 1),
+                    json.dumps(c.affected_owners), json.dumps(files), now, now,
+                ),
+            )
+            recorded += 1
+        self._conn.commit()
+        return recorded
+
+    def mark_resolved_for_mr(self, mr_id: int) -> int:
+        """Mark all open events involving this MR as resolved (on merge/close)."""
+        now = time.time()
+        cur = self._conn.execute(
+            """
+            UPDATE collision_events SET resolved_at = ?
+            WHERE resolved_at IS NULL AND (mr_a_id = ? OR mr_b_id = ?)
+            """,
+            (now, mr_id, mr_id),
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def get_analytics(self, cost_model=None) -> dict:
+        """Aggregate collision history into hotspots, owner load, and cost saved."""
+        from .cost_model import CostModel
+
+        cost_model = cost_model or CostModel.load()
+        rows = self._conn.execute("SELECT * FROM collision_events").fetchall()
+
+        total = len(rows)
+        resolved = sum(1 for r in rows if r["resolved_at"] is not None)
+        active = total - resolved
+
+        by_sev: dict[str, int] = {}
+        file_hot: dict[str, int] = {}
+        project_hot: dict[str, int] = {}
+        owner_load: dict[str, int] = {}
+        resolution_times: list[float] = []
+        dollars = 0.0
+        hours = 0.0
+
+        for r in rows:
+            by_sev[r["severity_label"]] = by_sev.get(r["severity_label"], 0) + 1
+
+            for f in json.loads(r["files"] or "[]"):
+                file_hot[f] = file_hot.get(f, 0) + 1
+            for p in (r["project_a"], r["project_b"]):
+                if p:
+                    project_hot[p] = project_hot.get(p, 0) + 1
+            for o in json.loads(r["owners"] or "[]"):
+                owner_load[o] = owner_load.get(o, 0) + 1
+
+            if r["resolved_at"] is not None:
+                resolution_times.append((r["resolved_at"] - r["first_seen"]) / 3600.0)
+
+            savings = cost_model.estimate(
+                r["severity_label"], r["caller_count"], r["distinct_projects"]
+            )
+            dollars += savings.dollars
+            hours += savings.hours
+
+        def top(d: dict, n: int = 5) -> list[dict]:
+            return [
+                {"name": k, "count": v}
+                for k, v in sorted(d.items(), key=lambda kv: kv[1], reverse=True)[:n]
+            ]
+
+        avg_resolution_hours = (
+            round(sum(resolution_times) / len(resolution_times), 2)
+            if resolution_times else None
+        )
+
+        return {
+            "totals": {
+                "total_collisions": total,
+                "active": active,
+                "resolved": resolved,
+                "by_severity": by_sev,
+            },
+            "cost_saved": {
+                "currency": cost_model.currency,
+                "dollars": round(dollars, 2),
+                "engineer_hours": round(hours, 2),
+            },
+            "hotspot_files": top(file_hot),
+            "hotspot_projects": top(project_hot),
+            "owner_load": top(owner_load),
+            "avg_resolution_hours": avg_resolution_hours,
+        }
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 

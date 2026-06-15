@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from .autofix import generate_fix
 from .collision_engine import CollisionEngine
+from .cost_model import CostModel
 from .gitlab_client import GitLabClient
 from .models import BlastRadius
 from .orbit_client import OrbitClient
@@ -38,6 +39,7 @@ logger = logging.getLogger(__name__)
 engine: CollisionEngine
 gitlab: GitLabClient
 orbit: OrbitClient
+cost_model: CostModel
 
 UI_DIR = Path(__file__).parent.parent / "ui"
 DB_PATH = os.getenv("MERGEGUARD_DB", "mergeguard.db")
@@ -64,11 +66,12 @@ def _local_source(project_path: str, file_path: str) -> Optional[str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global engine, gitlab, orbit
+    global engine, gitlab, orbit, cost_model
     engine = CollisionEngine(DB_PATH)
     gitlab = GitLabClient()
     orbit = OrbitClient()
-    logger.info("MergeGuard started — db=%s orbit_local=%s", DB_PATH, orbit.use_local)
+    cost_model = CostModel.load()
+    logger.info("MergeGuard started — db=%s orbit_local=%s autofix=%s", DB_PATH, orbit.use_local, AUTOFIX_ENABLED)
     yield
     engine.close()
     await gitlab.close()
@@ -122,6 +125,7 @@ async def handle_mr_webhook(request: Request) -> dict:
     logger.info("MR event: %s !%s action=%s project=%s", mr_id, mr_iid, action, project_path)
 
     if action in ("merge", "close"):
+        engine.mark_resolved_for_mr(mr_id)
         engine.close_mr(mr_id)
         return {"status": "closed", "mr_id": mr_id}
 
@@ -190,6 +194,13 @@ async def handle_mr_webhook(request: Request) -> dict:
     # Step 4: Find collisions against all other open MRs
     collisions = engine.find_collisions(mr_id)
     logger.info("Found %d collision(s) for !%s", len(collisions), mr_iid)
+
+    # Persist to history for analytics / cost-saved tracking
+    if collisions:
+        try:
+            engine.record_collisions(collisions)
+        except Exception as exc:
+            logger.warning("Failed to record collision history: %s", exc)
 
     # Step 4b: Compute the global merge plan (topological order across all MRs)
     merge_plan_text = ""
@@ -286,6 +297,11 @@ async def get_collisions(mr_id: int) -> dict:
                 "confidence": c.confidence,
                 "explanation": c.explanation,
                 "score_factors": c.score_factors,
+                "savings": cost_model.estimate(
+                    c.severity_label.value,
+                    len(c.affected_callers),
+                    c.score_factors.get("distinct_projects", 1),
+                ).to_dict(),
                 "suggested_order": c.suggested_order,
                 "affected_owners": c.affected_owners,
                 "affected_callers": [
@@ -307,6 +323,12 @@ async def get_collisions(mr_id: int) -> dict:
 async def get_merge_plan() -> dict:
     """Return the global optimal merge order across all open MRs."""
     return engine.get_merge_plan().to_dict()
+
+
+@app.get("/api/analytics")
+async def get_analytics() -> dict:
+    """Return cost/time saved + collision hotspots and owner load over time."""
+    return engine.get_analytics(cost_model=cost_model)
 
 
 @app.post("/api/autofix/{mr_id}")
