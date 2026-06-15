@@ -172,10 +172,17 @@ async def handle_mr_webhook(request: Request) -> dict:
     collisions = engine.find_collisions(mr_id)
     logger.info("Found %d collision(s) for !%s", len(collisions), mr_iid)
 
+    # Step 4b: Compute the global merge plan (topological order across all MRs)
+    merge_plan_text = ""
+    try:
+        merge_plan_text = engine.get_merge_plan().summary_text()
+    except Exception as exc:
+        logger.warning("Merge plan computation failed: %s", exc)
+
     # Step 5: Post MR comments for each collision
     comments_posted = 0
     for collision in collisions:
-        comment_body = collision.format_comment(mr_id)
+        comment_body = collision.format_comment(mr_id, merge_plan_text)
         try:
             await gitlab.post_mr_comment(project_id, mr_iid, comment_body)
             comments_posted += 1
@@ -190,7 +197,7 @@ async def handle_mr_webhook(request: Request) -> dict:
             try:
                 await gitlab.post_mr_comment(
                     other_project_id, other_iid,
-                    collision.format_comment(other_project_id),
+                    collision.format_comment(other_project_id, merge_plan_text),
                 )
             except Exception as exc:
                 logger.warning("Could not comment on other MR !%s: %s", other_iid, exc)
@@ -266,6 +273,12 @@ async def get_collisions(mr_id: int) -> dict:
             for c in collisions
         ],
     }
+
+
+@app.get("/api/merge-plan")
+async def get_merge_plan() -> dict:
+    """Return the global optimal merge order across all open MRs."""
+    return engine.get_merge_plan().to_dict()
 
 
 @app.get("/api/mrs")

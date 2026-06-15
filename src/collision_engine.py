@@ -21,6 +21,7 @@ from .models import (
     Severity,
     SymbolChange,
 )
+from .merge_sequencer import MergeEdge, MergePlan, MRNode, compute_merge_plan
 from .severity_scorer import score_collision_detailed, suggest_merge_order
 
 logger = logging.getLogger(__name__)
@@ -263,6 +264,51 @@ class CollisionEngine:
             total_collisions=len(edges),
             open_mrs=len(all_mrs),
         )
+
+    def get_merge_plan(self) -> MergePlan:
+        """Compute the global optimal merge order across all open MRs.
+
+        For each collision we identify the *changer* (the MR whose changed
+        symbols include the intersecting symbol) and the *caller* (the other
+        MR, which depends on the current contract). The caller must merge
+        first, so we add a 'merge-before' edge caller → changer. Mutually
+        colliding MRs form a cycle, surfaced as a coordination group.
+        """
+        all_mrs = self.all_open_mrs()
+        nodes = [
+            MRNode(br.mr_id, br.mr_iid, br.project_path, br.mr_title, br.mr_url)
+            for br in all_mrs
+        ]
+        changed_by = {br.mr_id: br.changed_symbol_names() for br in all_mrs}
+
+        edges: list[MergeEdge] = []
+        seen: set[tuple] = set()
+        for br in all_mrs:
+            for c in self.find_collisions(br.mr_id):
+                sym = c.intersecting_symbol
+                key = (min(c.mr_a_id, c.mr_b_id), max(c.mr_a_id, c.mr_b_id), sym)
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                a_changes = sym in changed_by.get(c.mr_a_id, set())
+                b_changes = sym in changed_by.get(c.mr_b_id, set())
+                if a_changes and not b_changes:
+                    changer, caller = c.mr_a_id, c.mr_b_id
+                elif b_changes and not a_changes:
+                    changer, caller = c.mr_b_id, c.mr_a_id
+                elif a_changes and b_changes:
+                    # Both change the same symbol → mutual conflict; add both
+                    # directions so the SCC pass flags a coordination group.
+                    edges.append(MergeEdge(c.mr_a_id, c.mr_b_id, sym, c.severity_label.value))
+                    edges.append(MergeEdge(c.mr_b_id, c.mr_a_id, sym, c.severity_label.value))
+                    continue
+                else:
+                    continue
+                # caller merges before changer
+                edges.append(MergeEdge(caller, changer, sym, c.severity_label.value))
+
+        return compute_merge_plan(nodes, edges)
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 
