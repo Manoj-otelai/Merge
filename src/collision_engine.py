@@ -474,6 +474,8 @@ class CollisionEngine:
             result.append({
                 "event_key": r["event_key"],
                 "symbol": r["symbol"],
+                "mr_a_id": r["mr_a_id"],
+                "mr_b_id": r["mr_b_id"],
                 "mr_a_iid": r["mr_a_iid"],
                 "mr_b_iid": r["mr_b_iid"],
                 "project_a": r["project_a"],

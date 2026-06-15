@@ -105,8 +105,10 @@
     let reconnectMs = 2000;
 
     es.onopen = () => {
-      const dot = document.querySelector(".live-dot");
-      if (dot) dot.title = "Live (SSE connected)";
+      const mode = document.getElementById("live-mode");
+      if (mode) mode.textContent = "Live (SSE)";
+      const dot = document.getElementById("live-dot");
+      if (dot) dot.style.background = "";  // reset to green
     };
 
     es.onmessage = (e) => {
@@ -125,15 +127,13 @@
     };
 
     es.onerror = () => {
-      const dot = document.querySelector(".live-dot");
+      const dot = document.getElementById("live-dot");
       if (dot) dot.style.background = "var(--medium)";
+      const mode = document.getElementById("live-mode");
+      if (mode) mode.textContent = "Polling";
       // On disconnect, fall back to polling; try to reconnect SSE after a delay
       setTimeout(() => {
-        if (es.readyState === EventSource.CLOSED) {
-          const d = document.querySelector(".live-dot");
-          if (d) d.style.background = "";
-          connectSSE();
-        }
+        if (es.readyState === EventSource.CLOSED) connectSSE();
       }, reconnectMs);
       reconnectMs = Math.min(reconnectMs * 2, 30000);
     };
@@ -458,7 +458,8 @@
             .on("click", (e, d) => { e.stopPropagation(); onNodeClick(d); })
             .on("mouseover", (e, d) => {
               hoverHighlight(d.id, true);
-              showTip(e, `<div class="tt-title">!${d.iid} · ${esc(truncate(d.title, 40))}</div><div class="tt-sub">${esc(d.project)}</div>`);
+              const dblHint = d.url ? ` · double-click to open` : "";
+              showTip(e, `<div class="tt-title">!${d.iid} · ${esc(truncate(d.title, 40))}</div><div class="tt-sub">${esc(d.project)}${dblHint}</div>`);
             })
             .on("mousemove", moveTip)
             .on("mouseout", (e, d) => { hoverHighlight(d.id, false); hideTip(); });
@@ -683,10 +684,16 @@
 
     const conf = Math.round((c.confidence ?? 1) * 100);
     const savings = c.savings || null;
+    const copyText = `Collision: ${c.symbol} (${c.severity_label}) — !${info.mr_iid} ↔ !${c.other_mr_iid}\n${c.explanation || ""}`.trim();
     let html = `
       <div class="detail-hero">
-        <div class="eyebrow">Semantic Collision</div>
-        <div class="detail-symbol">⚡ ${esc(c.symbol)} ${badge(c.severity_label)}</div>
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+          <div>
+            <div class="eyebrow">Semantic Collision</div>
+            <div class="detail-symbol">⚡ ${esc(c.symbol)} ${badge(c.severity_label)}</div>
+          </div>
+          <button class="copy-btn" id="copy-btn" data-text="${esc(copyText)}" title="Copy summary">⎘</button>
+        </div>
         <div style="margin-top:8px;font-size:12px;color:var(--text-muted)">
           Severity score: <strong style="color:${SEV_COLOR[c.severity_label]}">${Math.round((c.severity || 0) * 100)}%</strong>
         </div>
@@ -773,20 +780,34 @@
         <div class="autofix-result" id="autofix-result"></div>
       </div>`;
 
-    // Dismiss / acknowledge
+    // Dismiss / acknowledge (only shown when we have a tracked event_key)
     const dismissed = c.dismissed || false;
     const evKey = c.event_key || "";
-    html += `
-      <div class="section">
-        <div class="section-title">Acknowledgement</div>
-        <button class="dismiss-btn ${dismissed ? "undismiss" : ""}" id="dismiss-btn"
-                data-key="${esc(evKey)}" data-dismissed="${dismissed}">
-          ${dismissed ? "↩ Reopen collision" : "✓ Mark as reviewed"}
-        </button>
-        ${dismissed ? `<div class="dismiss-note">This collision has been acknowledged — it won't block the merge gate while dismissed.</div>` : ""}
-      </div>`;
+    if (evKey) {
+      html += `
+        <div class="section">
+          <div class="section-title">Acknowledgement</div>
+          <button class="dismiss-btn ${dismissed ? "undismiss" : ""}" id="dismiss-btn"
+                  data-key="${esc(evKey)}" data-dismissed="${dismissed}">
+            ${dismissed ? "↩ Reopen collision" : "✓ Mark as reviewed"}
+          </button>
+          ${dismissed ? `<div class="dismiss-note">This collision has been acknowledged — it won't block the merge gate while dismissed.</div>` : ""}
+        </div>`;
+    }
 
     showContent(html);
+
+    // Copy button
+    const copyBtn = document.getElementById("copy-btn");
+    if (copyBtn) {
+      copyBtn.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(copyBtn.dataset.text);
+          copyBtn.textContent = "✓";
+          setTimeout(() => { copyBtn.textContent = "⎘"; }, 1500);
+        } catch { /* clipboard unavailable */ }
+      };
+    }
 
     const btn = document.getElementById("autofix-btn");
     if (btn) btn.onclick = () => previewAutofix(btn.dataset.mr, btn.dataset.symbol, btn);
@@ -894,8 +915,11 @@
       const when = relTime(ev.last_seen);
       const firstWhen = relTime(ev.first_seen);
       const ownerStr = (ev.owners || []).slice(0, 3).map((o) => `@${o}`).join(", ");
+      const canInspect = ev.status === "active" && ev.mr_a_id;
       html += `
-        <div class="tl-item status-${ev.status}">
+        <div class="tl-item status-${ev.status}${canInspect ? " tl-clickable" : ""}"
+             data-mr-a="${ev.mr_a_id || ""}" data-symbol="${esc(ev.symbol)}" tabindex="${canInspect ? 0 : -1}"
+             role="${canInspect ? "button" : ""}" aria-label="${canInspect ? `Inspect collision on ${esc(ev.symbol)}` : ""}">
           <div class="tl-marker"><span class="tl-dot ${ev.status}"></span></div>
           <div class="tl-body">
             <div class="tl-top">
@@ -903,6 +927,7 @@
               ${badge(ev.severity_label)}
               ${ev.status === "dismissed" ? `<span class="tl-dismissed-tag">acknowledged</span>` : ""}
               ${ev.status === "resolved" ? `<span class="tl-resolved-tag">resolved</span>` : ""}
+              ${canInspect ? `<span class="tl-inspect-hint">click to inspect →</span>` : ""}
             </div>
             <div class="tl-mrs">
               <span class="mr-ref">!${ev.mr_a_iid}</span>
@@ -925,6 +950,32 @@
 
     html += `</div>`;
     el.innerHTML = html;
+
+    // Wire up clickable timeline items to navigate to collision detail
+    el.querySelectorAll(".tl-clickable").forEach((item) => {
+      const mrAId = Number(item.dataset.mrA);
+      const symbol = item.dataset.symbol;
+      const handler = async () => {
+        if (!mrAId) return;
+        try {
+          const resp = await fetch(`/api/collisions/${mrAId}`);
+          if (!resp.ok) return;
+          const info = await resp.json();
+          const collision = (info.collisions || []).find((c) => c.symbol === symbol) || null;
+          if (collision) {
+            switchView("list");
+            // Show detail in side panel
+            renderEdgeDetail(info, collision, {
+              source: { id: mrAId },
+              target: { id: collision.other_mr_id },
+              symbol,
+            });
+          }
+        } catch { /* silent */ }
+      };
+      item.addEventListener("click", handler);
+      item.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handler(); } });
+    });
   }
 
   // ── List view ──────────────────────────────────────────────────────────────

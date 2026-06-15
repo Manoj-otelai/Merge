@@ -164,7 +164,7 @@ header {
   width: 100%;
   padding: 22px 28px 6px;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 16px;
 }
 
@@ -196,6 +196,7 @@ header {
 .stat-icon.red    { background: var(--critical-bg); }
 .stat-icon.amber  { background: var(--medium-bg); }
 .stat-icon.green  { background: var(--low-bg); }
+.stat-icon.teal   { background: #e6fbf6; }
 .stat-value { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
 .stat-meta { font-size: 12px; color: var(--text-muted); }
 
@@ -256,7 +257,11 @@ main {
   border-radius: var(--radius-sm);
   padding: 3px;
   gap: 2px;
+  overflow-x: auto;
+  flex-shrink: 0;
+  scrollbar-width: none;
 }
+.view-toggle::-webkit-scrollbar { display: none; }
 .view-toggle button {
   font-family: inherit;
   font-size: 12.5px;
@@ -265,8 +270,9 @@ main {
   background: transparent;
   border: none;
   border-radius: 6px;
-  padding: 5px 12px;
+  padding: 5px 10px;
   cursor: pointer;
+  white-space: nowrap;
   transition: background 0.15s, color 0.15s, box-shadow 0.15s;
 }
 .view-toggle button.active {
@@ -274,6 +280,7 @@ main {
   color: var(--text);
   box-shadow: var(--shadow-sm);
 }
+.view-toggle button:disabled { opacity: 0.4; cursor: default; }
 
 /* ── Graph ──────────────────────────────────────────────────────────────── */
 .graph-body {
@@ -684,6 +691,9 @@ footer a { color: var(--text-soft); font-weight: 500; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ── Responsive ─────────────────────────────────────────────────────────── */
+@media (max-width: 1240px) {
+  .stats-row { grid-template-columns: repeat(3, 1fr); }
+}
 @media (max-width: 1080px) {
   .stats-row { grid-template-columns: repeat(2, 1fr); }
   .layout { grid-template-columns: 1fr; height: auto; }
@@ -944,9 +954,7 @@ kbd {
 .ask-answer .ask-a code { background: var(--accent-soft); color: var(--accent); padding: 1px 5px; border-radius: 4px; }
 .ask-thinking { color: var(--text-muted); }
 
-@media (max-width: 1320px) {
-  .stats-row { grid-template-columns: repeat(3, 1fr); }
-}
+/* handled by the main responsive section above */
 
 /* ── Timeline view ──────────────────────────────────────────────────────── */
 .tl-summary {
@@ -997,6 +1005,21 @@ kbd {
 .tl-arrow { color: var(--text-muted); }
 .tl-meta { font-size: 11.5px; color: var(--text-soft); margin-bottom: 2px; }
 .tl-times { font-size: 11px; color: var(--text-muted); }
+.tl-clickable {
+  cursor: pointer;
+  transition: background 0.12s;
+  border-radius: var(--radius-sm);
+  margin: 0 -6px;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+.tl-clickable:hover { background: var(--surface-2); }
+.tl-clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tl-inspect-hint {
+  font-size: 10.5px; color: var(--accent); margin-left: 4px;
+  opacity: 0; transition: opacity 0.15s;
+}
+.tl-clickable:hover .tl-inspect-hint { opacity: 1; }
 
 /* ── Dismiss / acknowledge button ────────────────────────────────────────── */
 .dismiss-btn {
@@ -1054,6 +1077,18 @@ kbd {
 }
 .shortcut-row span { flex: 1; }
 
+/* ── Copy button ─────────────────────────────────────────────────────────── */
+.copy-btn {
+  flex-shrink: 0;
+  font-family: var(--mono); font-size: 15px; font-weight: 500;
+  color: var(--text-muted); background: none;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  width: 30px; height: 30px; display: grid; place-items: center;
+  cursor: pointer; transition: background 0.15s, color 0.15s;
+}
+.copy-btn:hover { background: var(--surface-2); color: var(--text); }
+.copy-btn:active { transform: scale(0.94); }
+
 /* ── Pulsing critical / high graph edges ────────────────────────────────── */
 @keyframes edge-pulse {
   0%, 100% { stroke-opacity: 1; }
@@ -1065,6 +1100,3 @@ kbd {
 /* ── Node double-click hint on hover ─────────────────────────────────────── */
 g.node { cursor: pointer; }
 g.node:active circle { transform: scale(0.96); transform-origin: center; }
-
-/* ── Stats: teal icon ────────────────────────────────────────────────────── */
-.stat-icon.teal { background: #e6fbf6; }
