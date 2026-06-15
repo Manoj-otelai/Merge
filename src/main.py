@@ -141,6 +141,9 @@ async def handle_mr_webhook(request: Request) -> dict:
     if action in ("merge", "close"):
         engine.mark_resolved_for_mr(mr_id)
         engine.close_mr(mr_id)
+        # A merge changes the default branch, so cached blast radii may be stale.
+        if action == "merge":
+            orbit.invalidate()
         return {"status": "closed", "mr_id": mr_id}
 
     if action not in ("open", "update", "reopen"):
@@ -524,9 +527,24 @@ async def list_mrs() -> dict:
     }
 
 
+@app.get("/api/metrics")
+async def get_metrics() -> dict:
+    """Orbit cache hit rate + query-latency percentiles (Phase 5.2)."""
+    return {"orbit": orbit.get_metrics()}
+
+
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "version": "1.0.0"}
+    return {
+        "status": "ok",
+        "version": "1.0.0",
+        "features": {
+            "autofix": AUTOFIX_ENABLED,
+            "ci_gate": CI_GATE_ENABLED,
+            "slack": slack.enabled,
+            "orbit_cache": orbit.get_metrics()["cache_enabled"],
+        },
+    }
 
 
 @app.get("/")

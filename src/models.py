@@ -9,6 +9,13 @@ class Language(str, Enum):
     PYTHON = "python"
     JAVASCRIPT = "javascript"
     TYPESCRIPT = "typescript"
+    GO = "go"
+    RUBY = "ruby"
+    JAVA = "java"
+    KOTLIN = "kotlin"
+    RUST = "rust"
+    CSHARP = "csharp"
+    PHP = "php"
     UNKNOWN = "unknown"
 
 

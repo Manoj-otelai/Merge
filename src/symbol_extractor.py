@@ -32,6 +32,8 @@ def extract_from_diff(diff_text: str) -> list[SymbolChange]:
             changes.extend(_diff_python(fd))
         elif fd.language in (Language.JAVASCRIPT, Language.TYPESCRIPT):
             changes.extend(_diff_js(fd))
+        elif fd.language in _REGEX_LANGS:
+            changes.extend(_diff_regex(fd))
     return changes
 
 
@@ -117,6 +119,20 @@ def _detect_language(path: str) -> Language:
         return Language.JAVASCRIPT
     if path.endswith((".ts", ".tsx")):
         return Language.TYPESCRIPT
+    if path.endswith(".go"):
+        return Language.GO
+    if path.endswith(".rb"):
+        return Language.RUBY
+    if path.endswith(".java"):
+        return Language.JAVA
+    if path.endswith((".kt", ".kts")):
+        return Language.KOTLIN
+    if path.endswith(".rs"):
+        return Language.RUST
+    if path.endswith(".cs"):
+        return Language.CSHARP
+    if path.endswith(".php"):
+        return Language.PHP
     return Language.UNKNOWN
 
 
@@ -174,6 +190,80 @@ def _ast_func_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
 def _diff_python(fd: FileDiff) -> list[SymbolChange]:
     old_sigs = _parse_python_signatures(fd.old_source)
     new_sigs = _parse_python_signatures(fd.new_source)
+    return _compute_changes(old_sigs, new_sigs, fd.file_path, fd.language)
+
+
+# ── Generic regex-based extraction (Go, Ruby, Java, Kotlin, Rust, C#, PHP) ───
+# Each language maps to (function_patterns, type_pattern). Function patterns must
+# capture (1) the symbol name and (2) the parameter list. Signatures are keyed by
+# name, so a change is only flagged when a known symbol's params change or it is
+# removed — which keeps these forgiving regexes from producing false positives.
+
+_REGEX_LANG_PATTERNS: dict[Language, tuple[list[re.Pattern], Optional[re.Pattern]]] = {
+    Language.GO: (
+        [re.compile(r"^func\s+(?:\([^)]*\)\s*)?(\w+)\s*\(([^)]*)\)", re.MULTILINE)],
+        re.compile(r"^type\s+(\w+)\s+(?:struct|interface)", re.MULTILINE),
+    ),
+    Language.RUBY: (
+        [re.compile(r"^\s*def\s+(?:self\.)?(\w+[!?=]?)\s*(?:\(([^)]*)\))?", re.MULTILINE)],
+        re.compile(r"^\s*(?:class|module)\s+(\w+)", re.MULTILINE),
+    ),
+    Language.JAVA: (
+        [re.compile(
+            r"^\s*(?:@\w+\s+)*(?:public|private|protected|static|final|abstract|synchronized|native|\s)+"
+            r"[\w<>\[\],.\s]+?\s+(\w+)\s*\(([^)]*)\)\s*(?:throws[\w,\s.]+)?\{",
+            re.MULTILINE)],
+        re.compile(r"^\s*(?:public|private|protected|abstract|final|\s)*(?:class|interface|enum|record)\s+(\w+)", re.MULTILINE),
+    ),
+    Language.KOTLIN: (
+        [re.compile(r"^\s*(?:(?:public|private|protected|internal|open|override|suspend|inline|\s)+)?fun\s+(?:<[^>]+>\s*)?(\w+)\s*\(([^)]*)\)", re.MULTILINE)],
+        re.compile(r"^\s*(?:data\s+|sealed\s+|abstract\s+|open\s+)?(?:class|interface|object)\s+(\w+)", re.MULTILINE),
+    ),
+    Language.RUST: (
+        [re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)", re.MULTILINE)],
+        re.compile(r"^\s*(?:pub\s+)?(?:struct|enum|trait)\s+(\w+)", re.MULTILINE),
+    ),
+    Language.CSHARP: (
+        [re.compile(
+            r"^\s*(?:\[[^\]]+\]\s*)*(?:public|private|protected|internal|static|virtual|override|async|sealed|partial|\s)+"
+            r"[\w<>\[\],.\s]+?\s+(\w+)\s*\(([^)]*)\)",
+            re.MULTILINE)],
+        re.compile(r"^\s*(?:public|private|protected|internal|abstract|sealed|partial|\s)*(?:class|interface|struct|record|enum)\s+(\w+)", re.MULTILINE),
+    ),
+    Language.PHP: (
+        [re.compile(r"^\s*(?:(?:public|private|protected|static|abstract|final)\s+)*function\s+(\w+)\s*\(([^)]*)\)", re.MULTILINE)],
+        re.compile(r"^\s*(?:abstract\s+|final\s+)?(?:class|interface|trait)\s+(\w+)", re.MULTILINE),
+    ),
+}
+
+_REGEX_LANGS = frozenset(_REGEX_LANG_PATTERNS)
+
+
+def _parse_regex_signatures(source: str, language: Language) -> dict[str, tuple[str, int]]:
+    func_patterns, class_pattern = _REGEX_LANG_PATTERNS[language]
+    sigs: dict[str, tuple[str, int]] = {}
+
+    for pattern in func_patterns:
+        for match in pattern.finditer(source):
+            name = match.group(1)
+            params_group = match.group(2) if match.lastindex and match.lastindex >= 2 else ""
+            params = re.sub(r"\s+", " ", (params_group or "").strip())
+            line_no = source[: match.start()].count("\n") + 1
+            if name not in sigs:
+                sigs[name] = (f"{name}({params})", line_no)
+
+    if class_pattern:
+        for match in class_pattern.finditer(source):
+            name = match.group(1)
+            line_no = source[: match.start()].count("\n") + 1
+            sigs[f"class:{name}"] = (f"type {name}", line_no)
+
+    return sigs
+
+
+def _diff_regex(fd: FileDiff) -> list[SymbolChange]:
+    old_sigs = _parse_regex_signatures(fd.old_source, fd.language)
+    new_sigs = _parse_regex_signatures(fd.new_source, fd.language)
     return _compute_changes(old_sigs, new_sigs, fd.file_path, fd.language)
 
 

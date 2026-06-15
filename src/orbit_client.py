@@ -13,7 +13,9 @@ import json
 import logging
 import os
 import subprocess
-from typing import Any, Optional
+import time
+from collections import deque
+from typing import Any, Awaitable, Callable, Optional
 
 import httpx
 
@@ -70,8 +72,75 @@ class OrbitClient:
             timeout=30.0,
         )
 
+        # ── Blast-radius cache + latency metrics (Phase 5.2) ──
+        # Orbit indexes the default branch, so a symbol's callers only change
+        # when the default branch changes (i.e. on merge) — a TTL cache is safe
+        # and avoids redundant graph calls when many MRs touch the same symbol.
+        self._cache_enabled = os.getenv("ORBIT_CACHE", "true").lower() == "true"
+        self._cache_ttl = float(os.getenv("ORBIT_CACHE_TTL", "300"))
+        self._cache: dict[tuple, tuple[float, Any]] = {}
+        self._latencies_ms: deque[float] = deque(maxlen=500)
+        self._hits = 0
+        self._misses = 0
+
+    async def _cached(self, key: tuple, factory: Callable[[], Awaitable[Any]]) -> Any:
+        """Return a cached value or compute it, recording query latency on miss."""
+        now = time.time()
+        if self._cache_enabled:
+            entry = self._cache.get(key)
+            if entry and entry[0] > now:
+                self._hits += 1
+                return entry[1]
+        self._misses += 1
+        start = time.perf_counter()
+        value = await factory()
+        self._latencies_ms.append((time.perf_counter() - start) * 1000.0)
+        if self._cache_enabled:
+            self._cache[key] = (now + self._cache_ttl, value)
+        return value
+
+    def invalidate(self, symbol_name: str | None = None) -> int:
+        """Invalidate cache entries (all, or for one symbol). Call on merge."""
+        if symbol_name is None:
+            n = len(self._cache)
+            self._cache.clear()
+            return n
+        keys = [k for k in self._cache if len(k) > 1 and k[1] == symbol_name]
+        for k in keys:
+            del self._cache[k]
+        return len(keys)
+
+    def get_metrics(self) -> dict:
+        """Cache hit rate and query-latency percentiles."""
+        lat = sorted(self._latencies_ms)
+        total = self._hits + self._misses
+
+        def pct(p: float) -> float:
+            if not lat:
+                return 0.0
+            idx = min(int(p * len(lat)), len(lat) - 1)
+            return round(lat[idx], 2)
+
+        return {
+            "cache_enabled": self._cache_enabled,
+            "cache_ttl_seconds": self._cache_ttl,
+            "cache_entries": len(self._cache),
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate": round(self._hits / total, 3) if total else 0.0,
+            "queries": len(lat),
+            "latency_ms": {"p50": pct(0.50), "p95": pct(0.95), "p99": pct(0.99),
+                           "max": round(lat[-1], 2) if lat else 0.0},
+        }
+
     async def get_callers(self, symbol_name: str, project_id: int) -> list[CallerInfo]:
-        """Return all functions that call `symbol_name` across all repos."""
+        """Return all functions that call `symbol_name` across all repos (cached)."""
+        return await self._cached(
+            ("callers", symbol_name, project_id),
+            lambda: self._get_callers_uncached(symbol_name, project_id),
+        )
+
+    async def _get_callers_uncached(self, symbol_name: str, project_id: int) -> list[CallerInfo]:
         try:
             rows = await self._query(
                 _QUERY_CALLERS,
@@ -94,7 +163,13 @@ class OrbitClient:
             return self._mock_callers(symbol_name, project_id)
 
     async def get_centrality(self, symbol_name: str) -> float:
-        """Return caller count as a proxy for symbol centrality."""
+        """Return caller count as a proxy for symbol centrality (cached)."""
+        return await self._cached(
+            ("centrality", symbol_name),
+            lambda: self._get_centrality_uncached(symbol_name),
+        )
+
+    async def _get_centrality_uncached(self, symbol_name: str) -> float:
         try:
             rows = await self._query(_QUERY_CENTRALITY, {"name": symbol_name})
             if rows:
@@ -104,7 +179,13 @@ class OrbitClient:
         return 0.0
 
     async def get_owners(self, symbol_name: str) -> list[str]:
-        """Return GitLab usernames that own this symbol."""
+        """Return GitLab usernames that own this symbol (cached)."""
+        return await self._cached(
+            ("owners", symbol_name),
+            lambda: self._get_owners_uncached(symbol_name),
+        )
+
+    async def _get_owners_uncached(self, symbol_name: str) -> list[str]:
         try:
             rows = await self._query(_QUERY_OWNERS, {"name": symbol_name})
             return [r["username"] for r in rows if r.get("username")]
