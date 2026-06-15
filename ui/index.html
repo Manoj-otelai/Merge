@@ -62,6 +62,14 @@
       <span class="stat-value" id="stat-callers">0</span>
       <span class="stat-meta">downstream of changed symbols</span>
     </div>
+    <div class="stat-card clickable" id="stat-saved-card" role="button" tabindex="0" title="See the impact breakdown">
+      <div class="stat-top">
+        <span class="stat-label">Est. cost saved</span>
+        <span class="stat-icon teal">💰</span>
+      </div>
+      <span class="stat-value" id="stat-saved">—</span>
+      <span class="stat-meta" id="stat-saved-meta">incidents prevented pre-merge</span>
+    </div>
   </div>
 
   <!-- ── Main ───────────────────────────────────────────────────────────── -->
@@ -74,6 +82,8 @@
           <div class="view-toggle" id="view-toggle">
             <button data-view="graph" class="active">Graph</button>
             <button data-view="list">List</button>
+            <button data-view="plan">Plan</button>
+            <button data-view="insights">Insights</button>
           </div>
         </div>
 
@@ -121,6 +131,12 @@
 
         <!-- List view -->
         <div class="list-body hidden" id="list-view"></div>
+
+        <!-- Plan view -->
+        <div class="scroll-body hidden" id="plan-view"></div>
+
+        <!-- Insights view -->
+        <div class="scroll-body hidden" id="insights-view"></div>
 
         <div class="legend">
           <span class="legend-item"><span class="legend-line critical"></span> Critical</span>

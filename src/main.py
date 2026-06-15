@@ -211,13 +211,23 @@ async def handle_mr_webhook(request: Request) -> dict:
 
     # Step 5: Post MR comments for each collision
     base_url = os.getenv("MERGEGUARD_PUBLIC_URL", "").rstrip("/")
+
+    def build_actions(perspective_id: int, symbol: str) -> str:
+        links: list[str] = []
+        if AUTOFIX_ENABLED and base_url:
+            links.append(
+                f"🔧 [**Draft the consumer-side fix**]({base_url}/api/autofix/{perspective_id}?symbol={symbol}) "
+                f"— MergeGuard rewrites the affected call sites and opens a draft MR."
+            )
+        if base_url:
+            links.append(f"🗺️ [**View collision map**]({base_url}/)")
+        return ("\n" + "\n".join(links)) if links else ""
+
     comments_posted = 0
     for collision in collisions:
-        autofix_url = (
-            f"{base_url}/api/autofix/{mr_id}?symbol={collision.intersecting_symbol}"
-            if AUTOFIX_ENABLED and base_url else ""
+        comment_body = collision.format_comment(
+            mr_id, merge_plan_text, build_actions(mr_id, collision.intersecting_symbol)
         )
-        comment_body = collision.format_comment(mr_id, merge_plan_text, autofix_url)
         try:
             await gitlab.post_mr_comment(project_id, mr_iid, comment_body)
             comments_posted += 1
@@ -230,13 +240,12 @@ async def handle_mr_webhook(request: Request) -> dict:
                 collision.mr_b_iid if mr_id == collision.mr_a_id else collision.mr_a_iid
             )
             try:
-                other_autofix_url = (
-                    f"{base_url}/api/autofix/{other_project_id}?symbol={collision.intersecting_symbol}"
-                    if AUTOFIX_ENABLED and base_url else ""
-                )
                 await gitlab.post_mr_comment(
                     other_project_id, other_iid,
-                    collision.format_comment(other_project_id, merge_plan_text, other_autofix_url),
+                    collision.format_comment(
+                        other_project_id, merge_plan_text,
+                        build_actions(other_project_id, collision.intersecting_symbol),
+                    ),
                 )
             except Exception as exc:
                 logger.warning("Could not comment on other MR !%s: %s", other_iid, exc)

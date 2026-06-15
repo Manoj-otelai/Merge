@@ -12,6 +12,8 @@
   let svg, root, linkLayer, labelLayer, nodeLayer, zoom, simulation, tooltip;
   let width = 0, height = 0;
   let currentData = { nodes: [], edges: [] };
+  let currentAnalytics = null;
+  let currentPlan = null;
   let nodeMap = new Map();              // id → node, updated on each render
   let selected = null;                 // { type:'node'|'edge', id }
   let currentView = "graph";
@@ -37,6 +39,13 @@
     if (collCard) {
       collCard.onclick = () => switchView("list");
       collCard.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); switchView("list"); } };
+    }
+
+    // Cost-saved stat card → switch to insights view
+    const savedCard = document.getElementById("stat-saved-card");
+    if (savedCard) {
+      savedCard.onclick = () => switchView("insights");
+      savedCard.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); switchView("insights"); } };
     }
 
     // Filter pills
@@ -158,18 +167,40 @@
   // ── Data fetch ────────────────────────────────────────────────────────────
   async function fetchAndRender() {
     try {
-      const resp = await fetch("/api/collision-map");
-      if (!resp.ok) throw new Error("API " + resp.status);
-      const data = await resp.json();
+      const [mapResp, anResp, planResp] = await Promise.all([
+        fetch("/api/collision-map"),
+        fetch("/api/analytics").catch(() => null),
+        fetch("/api/merge-plan").catch(() => null),
+      ]);
+      if (!mapResp.ok) throw new Error("API " + mapResp.status);
+      const data = await mapResp.json();
       currentData = data;
+      currentAnalytics = anResp && anResp.ok ? await anResp.json() : null;
+      currentPlan = planResp && planResp.ok ? await planResp.json() : null;
+
       updateStats(data);
+      updateSavedStat(currentAnalytics);
       if (HAS_D3) render(data);
       if (!HAS_D3 || currentView === "list") renderList(data);
+      if (currentView === "plan") renderPlan(currentPlan);
+      if (currentView === "insights") renderInsights(currentAnalytics);
     } catch (err) {
       console.error("MergeGuard fetch error:", err);
     } finally {
       document.getElementById("loading-state").classList.add("hidden");
       document.getElementById("last-updated").textContent = timeNow();
+    }
+  }
+
+  function updateSavedStat(analytics) {
+    const el = document.getElementById("stat-saved");
+    const meta = document.getElementById("stat-saved-meta");
+    if (!el) return;
+    if (!analytics || !analytics.cost_saved) { el.textContent = "—"; return; }
+    el.textContent = compactMoney(analytics.cost_saved.dollars, analytics.cost_saved.currency);
+    if (meta) {
+      const hrs = Math.round(analytics.cost_saved.engineer_hours || 0);
+      meta.textContent = `~${hrs} eng-hours saved`;
     }
   }
 
@@ -523,6 +554,8 @@
     const callers = c.affected_callers || [];
     const owners  = c.affected_owners  || [];
 
+    const conf = Math.round((c.confidence ?? 1) * 100);
+    const savings = c.savings || null;
     let html = `
       <div class="detail-hero">
         <div class="eyebrow">Semantic Collision</div>
@@ -530,8 +563,28 @@
         <div style="margin-top:8px;font-size:12px;color:var(--text-muted)">
           Severity score: <strong style="color:${SEV_COLOR[c.severity_label]}">${Math.round((c.severity || 0) * 100)}%</strong>
         </div>
-      </div>
+        <div class="confidence-meter">
+          <span class="confidence-track"><span class="confidence-fill" style="width:${conf}%"></span></span>
+          <span class="confidence-val">${conf}% confidence</span>
+        </div>
+      </div>`;
 
+    if (c.explanation) {
+      html += `<div class="section"><div class="section-title">Why this is dangerous</div><div class="action-text">${mdCode(c.explanation)}</div></div>`;
+    }
+
+    if (savings) {
+      html += `
+        <div class="section">
+          <div class="section-title">Estimated impact prevented</div>
+          <div style="display:flex;gap:16px;flex-wrap:wrap">
+            <div><div style="font-size:20px;font-weight:700;color:#0a7c66">${compactMoney(savings.dollars, currentAnalytics?.cost_saved?.currency)}</div><div style="font-size:11.5px;color:var(--text-muted)">cost avoided</div></div>
+            <div><div style="font-size:20px;font-weight:700;color:var(--accent)">${Math.round(savings.hours)}h</div><div style="font-size:11.5px;color:var(--text-muted)">eng-time avoided</div></div>
+          </div>
+        </div>`;
+    }
+
+    html += `
       <div class="section">
         <div class="section-title">What's colliding</div>
         <div class="mr-card">
@@ -582,7 +635,63 @@
     if (c.suggested_order) {
       html += `<div class="section"><div class="section-title">Suggested merge order</div><div class="advice"><span class="advice-icon">🧭</span><span>${esc(c.suggested_order)}</span></div></div>`;
     }
+
+    // Auto-fix preview (works against the live registry / local source mirror)
+    html += `
+      <div class="section">
+        <div class="section-title">Auto-fix</div>
+        <button class="autofix-btn" id="autofix-btn" data-mr="${info.mr_id}" data-symbol="${esc(c.symbol)}">
+          🔧 Preview consumer-side fix
+        </button>
+        <div class="autofix-result" id="autofix-result"></div>
+      </div>`;
+
     showContent(html);
+
+    const btn = document.getElementById("autofix-btn");
+    if (btn) btn.onclick = () => previewAutofix(btn.dataset.mr, btn.dataset.symbol, btn);
+  }
+
+  async function previewAutofix(mrId, symbol, btn) {
+    const out = document.getElementById("autofix-result");
+    btn.disabled = true;
+    btn.textContent = "⏳ Generating patch…";
+    try {
+      const resp = await fetch(`/api/autofix/${mrId}?symbol=${encodeURIComponent(symbol)}`, { method: "POST" });
+      if (!resp.ok) throw new Error("API " + resp.status);
+      const data = await resp.json();
+      const plan = data.plan || {};
+      btn.disabled = false;
+      btn.textContent = "🔧 Preview consumer-side fix";
+
+      if (!plan.fixable) {
+        const reasons = (plan.unfixable || []).map((u) => `<li>${esc(u)}</li>`).join("");
+        out.innerHTML = `<div class="advice" style="margin-top:0"><span class="advice-icon">ℹ️</span><span>No automatic patch could be generated.${reasons ? `<ul style="margin:6px 0 0 16px">${reasons}</ul>` : ""}</span></div>`;
+        return;
+      }
+
+      const applied = data.applied
+        ? `<div class="patch-badge" style="margin-bottom:8px;display:inline-block">✅ Draft MR(s) opened</div>`
+        : `<div class="pf-meta" style="margin-bottom:8px">Dry-run preview — set <code>MERGEGUARD_AUTOFIX_ENABLED=true</code> to open the draft MR automatically.</div>`;
+
+      const files = (plan.patches || []).map((p) => `
+        <div class="patch-file">
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+            <span class="pf-path">${esc(projectShort(p.project_path))}/${esc(p.file_path)}</span>
+            <span class="patch-badge">${p.edits} edit${p.edits > 1 ? "s" : ""}</span>
+          </div>
+          <div class="pf-meta">${esc(p.project_path)}</div>
+        </div>`).join("");
+
+      out.innerHTML = `
+        ${applied}
+        <div class="pf-meta" style="margin-bottom:8px">Branch <code>${esc(plan.branch_name)}</code> · ${plan.total_edits} call site(s) across ${(plan.patches || []).length} file(s), each AST-validated.</div>
+        ${files}`;
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = "🔧 Preview consumer-side fix";
+      out.innerHTML = `<div class="advice" style="color:var(--critical);background:var(--critical-bg);border-color:#fecdca;margin-top:0">Could not generate the fix preview.</div>`;
+    }
   }
 
   // ── List view ──────────────────────────────────────────────────────────────
@@ -591,20 +700,29 @@
     currentView = view;
     listSelectedIdx = -1;
     document.querySelectorAll("#view-toggle button").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
-    const graphView  = document.getElementById("graph-view");
-    const listView   = document.getElementById("list-view");
-    const toolbar    = document.getElementById("list-toolbar");
+
+    const views = {
+      graph: document.getElementById("graph-view"),
+      list: document.getElementById("list-view"),
+      plan: document.getElementById("plan-view"),
+      insights: document.getElementById("insights-view"),
+    };
+    const toolbar = document.getElementById("list-toolbar");
+
+    Object.entries(views).forEach(([name, el]) => {
+      if (el) el.classList.toggle("hidden", name !== view);
+    });
+    toolbar.classList.toggle("hidden", view !== "list");
+
     if (view === "graph") {
-      graphView.classList.remove("hidden");
-      listView.classList.add("hidden");
-      toolbar.classList.add("hidden");
       sizeSvg();
-      simulation.alpha(0.3).restart();
-    } else {
-      graphView.classList.add("hidden");
-      listView.classList.remove("hidden");
-      toolbar.classList.remove("hidden");
+      if (simulation) simulation.alpha(0.3).restart();
+    } else if (view === "list") {
       renderList(currentData);
+    } else if (view === "plan") {
+      renderPlan(currentPlan);
+    } else if (view === "insights") {
+      renderInsights(currentAnalytics);
     }
   }
 
@@ -683,6 +801,103 @@
     });
   }
 
+  // ── Plan view ───────────────────────────────────────────────────────────────
+  function renderPlan(plan) {
+    const el = document.getElementById("plan-view");
+    if (!el) return;
+    if (!plan || (!plan.steps?.length && !plan.cycles?.length)) {
+      el.innerHTML = emptyBlock("🗺️", "No sequencing needed",
+        "There are no cross-MR collisions, so every open MR is safe to merge independently.");
+      return;
+    }
+
+    let html = `<div class="plan-intro">🧭 Optimal global merge order — ${plan.total_ordered} sequenced${plan.has_cycles ? `, ${plan.cycles.length} need coordination` : ""}.</div>`;
+
+    plan.steps.forEach((s, i) => {
+      html += `
+        <div class="plan-step">
+          <span class="step-num">${s.order}</span>
+          <div class="step-body">
+            <div class="step-title"><span class="mr-ref">!${s.mr_iid}</span> <span class="step-project">${esc(projectShort(s.project))}</span></div>
+            <div class="step-reason">${mdCode(s.reason)}</div>
+          </div>
+        </div>`;
+      if (i < plan.steps.length - 1) html += `<div class="plan-connector"></div>`;
+    });
+
+    (plan.cycles || []).forEach((g) => {
+      const members = g.members.map((m) => `<span class="badge high"><span class="badge-dot"></span>!${m.mr_iid}</span>`).join("");
+      html += `
+        <div class="coord-group">
+          <div class="coord-head">⚠️ Coordinate together (${g.members.length} MRs)</div>
+          <div class="coord-members">${members}</div>
+          <div class="coord-reason">${mdCode(g.reason)}</div>
+        </div>`;
+    });
+
+    el.innerHTML = html;
+  }
+
+  // ── Insights view ─────────────────────────────────────────────────────────
+  function renderInsights(a) {
+    const el = document.getElementById("insights-view");
+    if (!el) return;
+    if (!a) {
+      el.innerHTML = emptyBlock("📊", "No analytics yet",
+        "Once collisions are detected they're tracked here with cost, hotspots, and owner load.");
+      return;
+    }
+    const cs = a.cost_saved || {};
+    const totals = a.totals || {};
+    const hrs = Math.round(cs.engineer_hours || 0);
+
+    let html = `
+      <div class="cost-hero">
+        <div class="cost-amount">${compactMoney(cs.dollars || 0, cs.currency)}</div>
+        <div class="cost-label">estimated cost of incidents prevented before merge</div>
+        <div class="cost-sub"><strong>${hrs}</strong> engineer-hours · <strong>${totals.total_collisions || 0}</strong> collisions caught · <strong>${totals.resolved || 0}</strong> resolved</div>
+      </div>`;
+
+    // Severity breakdown chips
+    const bySev = totals.by_severity || {};
+    const sevColors = { critical: "var(--critical)", high: "var(--high)", medium: "var(--medium)", low: "var(--low)" };
+    const sevBg = { critical: "var(--critical-bg)", high: "var(--high-bg)", medium: "var(--medium-bg)", low: "var(--low-bg)" };
+    const chips = ["critical", "high", "medium", "low"]
+      .filter((s) => bySev[s])
+      .map((s) => `<span class="sev-chip" style="color:${sevColors[s]};background:${sevBg[s]}">${cap(s)} · ${bySev[s]}</span>`)
+      .join("");
+    if (chips) html += `<div class="insight-block"><div class="insight-title">By severity</div><div class="sev-chips">${chips}</div></div>`;
+
+    html += barBlock("Hotspot services", a.hotspot_projects, projectShort);
+    html += barBlock("Hotspot files", a.hotspot_files, (s) => s.split("/").pop());
+    html += barBlock("Owner load (reviewers pulled in)", a.owner_load, (s) => "@" + s);
+
+    if (a.avg_resolution_hours != null) {
+      html += `<div class="insight-block"><div class="insight-title">Avg resolution time</div><div style="font-size:13px;color:var(--text-soft)">${a.avg_resolution_hours} hours from first detection to merge/close</div></div>`;
+    }
+
+    el.innerHTML = html;
+  }
+
+  function barBlock(title, items, labelFn) {
+    if (!items || !items.length) return "";
+    const max = Math.max(...items.map((i) => i.count));
+    const rows = items.map((i) => {
+      const pct = max > 0 ? Math.round((i.count / max) * 100) : 0;
+      return `
+        <div class="bar-row">
+          <span class="bar-label" title="${esc(i.name)}">${esc(labelFn ? labelFn(i.name) : i.name)}</span>
+          <span class="bar-track"><span class="bar-fill" style="width:${pct}%"></span></span>
+          <span class="bar-count">${i.count}</span>
+        </div>`;
+    }).join("");
+    return `<div class="insight-block"><div class="insight-title">${esc(title)}</div>${rows}</div>`;
+  }
+
+  function emptyBlock(icon, title, sub) {
+    return `<div class="list-empty"><div class="empty-icon">${icon}</div><div class="empty-title">${esc(title)}</div><div class="empty-sub">${esc(sub)}</div></div>`;
+  }
+
   // ── Fit to view ─────────────────────────────────────────────────────────────
   function fitToView() {
     const nodes = simulation.nodes();
@@ -724,6 +939,13 @@
   }
   function truncate(s, n) { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
   function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : ""; }
+  function compactMoney(amount, currency) {
+    const sym = currency === "USD" || !currency ? "$" : currency + " ";
+    const n = Number(amount) || 0;
+    if (n >= 1e6) return `${sym}${(n / 1e6).toFixed(1)}M`;
+    if (n >= 1e3) return `${sym}${(n / 1e3).toFixed(0)}K`;
+    return `${sym}${n.toFixed(0)}`;
+  }
   function esc(s) {
     return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }

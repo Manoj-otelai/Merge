@@ -822,3 +822,104 @@ kbd {
   border-radius: 4px;
   color: var(--text-soft);
 }
+
+/* ── Stat icon: teal (cost saved) ───────────────────────────────────────── */
+.stat-icon.teal { background: #e6fbf6; }
+
+/* ── Generic scrollable view body (Plan / Insights) ─────────────────────── */
+.scroll-body { flex: 1; overflow-y: auto; min-height: 0; padding: 18px; }
+
+/* ── Merge Plan view ────────────────────────────────────────────────────── */
+.plan-intro {
+  font-size: 13px; color: var(--text-soft); margin-bottom: 16px;
+  display: flex; align-items: center; gap: 8px;
+}
+.plan-step {
+  display: flex; gap: 14px; align-items: flex-start;
+  padding: 14px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); margin-bottom: 10px; position: relative;
+}
+.plan-step .step-num {
+  flex-shrink: 0;
+  width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--accent-soft); color: var(--accent);
+  font-weight: 700; font-size: 14px;
+}
+.plan-step .step-body { min-width: 0; flex: 1; }
+.plan-step .step-title {
+  font-size: 13.5px; font-weight: 600; margin-bottom: 3px;
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.plan-step .step-title .mr-ref { color: var(--accent); font-family: var(--mono); }
+.plan-step .step-project { font-size: 12px; color: var(--text-muted); font-family: var(--mono); }
+.plan-step .step-reason { font-size: 12.5px; color: var(--text-soft); margin-top: 5px; line-height: 1.5; }
+.plan-step .step-reason code { background: var(--accent-soft); color: var(--accent); padding: 1px 5px; border-radius: 4px; }
+.plan-connector { width: 2px; height: 12px; background: var(--border-strong); margin: -4px 0 -4px 28px; }
+
+.coord-group {
+  border: 1px solid #fdca8e; background: var(--high-bg);
+  border-radius: var(--radius); padding: 14px; margin-bottom: 12px;
+}
+.coord-group .coord-head { font-size: 13.5px; font-weight: 700; color: var(--high); display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.coord-group .coord-members { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.coord-group .coord-reason { font-size: 12.5px; color: #8a3a08; line-height: 1.5; }
+.coord-group code { background: rgba(232,89,12,0.12); padding: 1px 5px; border-radius: 4px; }
+
+/* ── Insights view ──────────────────────────────────────────────────────── */
+.cost-hero {
+  text-align: center; padding: 22px;
+  background: linear-gradient(135deg, #e6fbf6, #f4f0ff);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  margin-bottom: 18px;
+}
+.cost-hero .cost-amount { font-size: 38px; font-weight: 800; letter-spacing: -0.02em; color: #0a7c66; line-height: 1.1; }
+.cost-hero .cost-label { font-size: 12.5px; color: var(--text-soft); margin-top: 4px; }
+.cost-hero .cost-sub { font-size: 12px; color: var(--text-muted); margin-top: 8px; }
+.cost-hero .cost-sub strong { color: var(--text); }
+
+.insight-block { margin-bottom: 20px; }
+.insight-title {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 10px;
+}
+.bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.bar-row .bar-label { width: 38%; font-size: 12.5px; color: var(--text); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-row .bar-track { flex: 1; height: 18px; background: var(--surface-2); border-radius: 5px; overflow: hidden; border: 1px solid var(--border); }
+.bar-row .bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent), #9b7cf5); border-radius: 5px 0 0 5px; }
+.bar-row .bar-count { width: 28px; text-align: right; font-size: 12px; font-weight: 600; color: var(--text-soft); }
+
+.sev-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.sev-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: var(--radius-pill); font-size: 12px; font-weight: 600; }
+
+/* ── Auto-fix preview ───────────────────────────────────────────────────── */
+.autofix-btn {
+  width: 100%; margin-top: 10px;
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  color: #fff; background: var(--accent); border: none;
+  border-radius: var(--radius-sm); padding: 9px 12px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  transition: background 0.15s, transform 0.1s;
+}
+.autofix-btn:hover { background: #5829d6; }
+.autofix-btn:active { transform: translateY(0.5px); }
+.autofix-btn:disabled { opacity: 0.6; cursor: default; }
+
+.autofix-result { margin-top: 12px; }
+.patch-file {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 12px; margin-bottom: 8px; background: var(--surface-2);
+}
+.patch-file .pf-path { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--text); word-break: break-all; }
+.patch-file .pf-meta { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+.patch-badge { font-size: 11px; font-weight: 600; color: var(--low); background: var(--low-bg); padding: 2px 8px; border-radius: var(--radius-pill); }
+
+/* Confidence meter */
+.confidence-meter { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.confidence-track { flex: 1; height: 6px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.confidence-fill { height: 100%; background: var(--accent); }
+.confidence-val { font-size: 11.5px; font-weight: 600; color: var(--text-soft); }
+
+@media (max-width: 1320px) {
+  .stats-row { grid-template-columns: repeat(3, 1fr); }
+}
